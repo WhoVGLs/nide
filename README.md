@@ -7,9 +7,23 @@ dikonfigurasi penuh memakai Lua.
 
 Rilis saat ini: **NIDE 0.2.0 "Jendela"**.
 
-Konfigurasi yang dipakai proyek ini ada di satu file:
-[`config/config.lua`](config/config.lua). Panduan lengkap pemakaian dan
-konfigurasi ada di [`Docs.txt`](Docs.txt).
+## Apa itu NIDE?
+
+NIDE adalah compositor Wayland: program yang mengelola jendela aplikasi,
+input keyboard dan mouse, serta tampilan di layar. NIDE sengaja dibuat
+kecil dan sederhana:
+
+- Jendela mengambang dan tanpa dekorasi, jadi aplikasi tampil polos.
+- Hampir semuanya dioperasikan dari keyboard.
+- Perilaku dan keybinding diatur lewat satu file Lua.
+- Perubahan config langsung aktif tanpa restart.
+
+NIDE bukan desktop lengkap. Tidak ada panel, launcher, workspace, atau
+animasi. Cocok kalau kamu ingin lingkungan Wayland yang ringan, cepat,
+dan mudah dikustomisasi lewat Lua.
+
+Konfigurasi proyek ada di [`config/config.lua`](config/config.lua), dan
+panduan lengkap ada di [`Docs.txt`](Docs.txt).
 
 ## Fitur
 
@@ -191,14 +205,4 @@ Selama versi masih `0.x`, API config dianggap belum stabil. Perubahan yang
 mematahkan config lama akan menaikkan `MINOR`, misalnya `0.2.0` menjadi
 `0.3.0`, dan dicatat di [`CHANGELOG.md`](CHANGELOG.md).
 
-### Codename rilis
-
-Seperti sistem operasi besar, setiap rilis NIDE punya codename unik
-berbahasa Indonesia. Codename menempel pada rilis `MINOR`; patch release
-memakai codename yang sama dengan rilis `MINOR`-nya.
-
-| Versi | Codename |
-|---|---|
-| `0.2.0` | **Jendela** |
-
-Versi saat ini: **0.2.0 "Jendela"**.
+Versi saat ini: **0.2.0**.

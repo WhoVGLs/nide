@@ -7,10 +7,6 @@ Dokumen ini menjelaskan cara build, menjalankan, memakai, dan
 mengonfigurasi NIDE. Ditulis untuk pemula; tidak perlu paham C atau
 Wayland untuk memakai NIDE sehari-hari.
 
-Rilis 0.2.0 memakai codename "Jendela". Setiap rilis MINOR mendapat
-codename unik berbahasa Indonesia; patch release memakai codename yang
-sama dengan rilis MINOR-nya.
-
 Daftar isi
 ----------
 1.  Apa itu NIDE
@@ -472,9 +468,7 @@ yang dipisahkan koma:
 
     nide.log("terminal =", terminal, "versi =", nide.version)
 
-nide.version berisi string versi SemVer NIDE, tanpa codename. Codename
-rilis (misalnya "Jendela" untuk 0.2.0) tercatat di changelog dan halaman
-rilis GitHub.
+nide.version berisi string versi NIDE.
 
 Saat dijalankan dari terminal, log langsung terlihat. Tambahkan opsi
 -d untuk log wlroots yang lebih detail:
@@ -626,12 +620,9 @@ Contoh:
     ./nide -d -c ~/.config/nide/config.lua
     ./nide --version
 
---version menampilkan versi SemVer, misalnya:
+--version menampilkan versi NIDE, misalnya:
 
     nide 0.2.0
-
-Codename rilis tidak ditampilkan di sini; lihat changelog dan halaman
-rilis GitHub.
 
 Environment yang relevan:
 
