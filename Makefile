@@ -22,7 +22,7 @@ install: $(BIN)
 		$(DESTDIR)$(PREFIX)/share/nide/config.lua
 	install -Dm644 nide.desktop \
 		$(DESTDIR)$(PREFIX)/share/wayland-sessions/nide.desktop
-	@echo "Salin config: mkdir -p ~/.config/nide && cp config/config.lua ~/.config/nide/"
+	@echo "Copy config: mkdir -p ~/.config/nide && cp config/config.lua ~/.config/nide/"
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/nide

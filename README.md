@@ -1,45 +1,44 @@
 # NIDE
 
-**NIDE** adalah singkatan rekursif dari **"NIDE Isn't a Desktop"**. Meskipun
-namanya begitu, NIDE adalah compositor Wayland kecil dan sederhana, dibangun
-dengan [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 dan
-dikonfigurasi penuh memakai Lua.
+**NIDE** is a recursive acronym for **"NIDE Isn't a Desktop"**. Despite the
+name, NIDE is a small, simple Wayland compositor built with
+[wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 and configured
+entirely with Lua.
 
-Rilis saat ini: **NIDE 0.2.0 "Jendela"**.
+Current release: **NIDE 0.2.0 "Jendela"**.
 
-## Apa itu NIDE?
+## What is NIDE?
 
-NIDE adalah compositor Wayland: program yang mengelola jendela aplikasi,
-input keyboard dan mouse, serta tampilan di layar. NIDE sengaja dibuat
-kecil dan sederhana:
+NIDE is a Wayland compositor: the program that manages application windows,
+keyboard and mouse input, and what appears on screen. NIDE is intentionally
+small and simple:
 
-- Jendela mengambang dan tanpa dekorasi, jadi aplikasi tampil polos.
-- Hampir semuanya dioperasikan dari keyboard.
-- Perilaku dan keybinding diatur lewat satu file Lua.
-- Perubahan config langsung aktif tanpa restart.
+- Windows float and have no decorations, so applications look plain.
+- Almost everything is driven from the keyboard.
+- Behavior and keybindings are configured in a single Lua file.
+- Config changes take effect immediately without a restart.
 
-NIDE bukan desktop lengkap. Tidak ada panel, launcher, workspace, atau
-animasi. Cocok kalau kamu ingin lingkungan Wayland yang ringan, cepat,
-dan mudah dikustomisasi lewat Lua.
+NIDE is not a full desktop. It has no panel, launcher, workspaces, or
+animations. It is a good fit if you want a lightweight, fast Wayland
+environment that is easy to customize with Lua.
 
-Konfigurasi proyek ada di [`config/config.lua`](config/config.lua), dan
-panduan lengkap ada di [`Docs.txt`](Docs.txt).
+The project configuration lives in [`config/config.lua`](config/config.lua),
+and the complete guide is in [`docs/manual.md`](docs/manual.md).
 
-## Fitur
+## Features
 
-- Compositor Wayland native berbasis wlroots.
-- Jendela **floating/dynamic**, bukan tiling.
-- Tanpa dekorasi dari compositor: tidak ada title bar, border, atau tombol
-  jendela. Aplikasi juga tidak diminta menggambar client-side decoration.
-- Konfigurasi keybinding dengan Lua, dibaca dari `~/.config/nide/config.lua`.
-- Hot reload: menyimpan file config langsung memperbarui binding tanpa restart.
-- `Super+W` membuka terminal, `Super+C` menutup jendela yang sedang fokus.
-- `Super+klik-kiri` untuk memindahkan jendela, `Super+klik-kanan` untuk
-  mengubah ukuran.
-- Clipboard dan primary selection (paste dengan klik tengah) didukung.
-- Satu binary kecil, satu file C, tanpa dependency toolkit.
+- Native Wayland compositor based on wlroots.
+- **Floating/dynamic** windows, not tiling.
+- No compositor-side decorations: no title bar, border, or window buttons.
+  Applications are also not asked to draw client-side decorations.
+- Lua keybinding configuration, read from `~/.config/nide/config.lua`.
+- Hot reload: saving the config file updates bindings without a restart.
+- `Super+W` opens a terminal, `Super+C` closes the focused window.
+- `Super+left-click` moves a window, `Super+right-click` resizes it.
+- Clipboard and primary selection (middle-click paste) are supported.
+- One small binary, one C file, no toolkit dependency.
 
-## Kebutuhan
+## Requirements
 
 Arch Linux:
 
@@ -47,8 +46,8 @@ Arch Linux:
 sudo pacman -S --needed base-devel wlroots0.20 lua54
 ```
 
-Distribusi lain perlu header pengembangan wlroots **0.20**, Lua **5.4**,
-wayland-server, dan xkbcommon.
+Other distributions need the wlroots **0.20** development headers, Lua **5.4**,
+wayland-server, and xkbcommon.
 
 ## Build
 
@@ -57,7 +56,7 @@ make
 ./nide --check -c config/config.lua
 ```
 
-Pasang ke sistem (opsional):
+Install system-wide (optional):
 
 ```sh
 sudo make install PREFIX=/usr
@@ -65,23 +64,23 @@ mkdir -p ~/.config/nide
 cp config/config.lua ~/.config/nide/config.lua
 ```
 
-`PREFIX=/usr` diperlukan agar display manager menemukan
-`/usr/share/wayland-sessions/nide.desktop`. Tanpa itu, file terpasang di
-`/usr/local` dan sesi NIDE mungkin tidak muncul di SDDM.
+`PREFIX=/usr` is required so the display manager can find
+`/usr/share/wayland-sessions/nide.desktop`. Without it, files are installed
+under `/usr/local` and the NIDE session may not appear in SDDM.
 
-## Menjalankan
+## Running
 
-Dari TTY (backend DRM/libinput):
+From a TTY (DRM/libinput backend):
 
 ```sh
 ./nide -c ~/.config/nide/config.lua
 ```
 
-Setelah terpasang, sesi `NIDE` juga muncul di display manager (SDDM, GDM,
-dsbx, dll.) lewat file `nide.desktop`.
+After installation, the `NIDE` session also appears in display managers
+(SDDM, GDM, etc.) through `nide.desktop`.
 
-Uji coba bersarang di dalam sesi X11/XWayland (aman, tidak mengganggu sesi
-utama):
+Nested test inside an X11/XWayland session (safe, does not disturb your main
+session):
 
 ```sh
 Xephyr :2 -screen 1280x800 &
@@ -89,22 +88,22 @@ DISPLAY=:2 WLR_BACKENDS=x11 WLR_RENDERER=pixman \
   WLR_RENDERER_ALLOW_SOFTWARE=1 ./nide -c config/config.lua
 ```
 
-Atau langsung di sesi X11 yang sedang berjalan:
+Or directly inside a running X11 session:
 
 ```sh
 WLR_BACKENDS=x11 WLR_RENDERER=pixman WLR_RENDERER_ALLOW_SOFTWARE=1 \
   ./nide -c config/config.lua
 ```
 
-Jendela compositor akan muncul sebagai jendela 1024x768. Klik jendela itu,
-lalu tekan `Super+W`.
+The compositor window appears as a 1024x768 window. Click it, then press
+`Super+W`.
 
-> Untuk uji di X11, `WLR_BACKENDS=x11` wajib dipakai. Backend Wayland bersarang
-> tidak tersedia di paket wlroots Arch.
+> For X11 testing, `WLR_BACKENDS=x11` is required. The nested Wayland backend
+> is not available in the Arch wlroots package.
 
-## Konfigurasi
+## Configuration
 
-Urutan pencarian file konfigurasi:
+Config file lookup order:
 
 1. `-c PATH`
 2. `$NIDE_CONFIG`
@@ -112,7 +111,7 @@ Urutan pencarian file konfigurasi:
 4. `~/.config/nide/config.lua`
 5. `./config.lua`
 
-Kalau tidak ada file config, NIDE memakai binding bawaan:
+If no config file exists, NIDE uses the default bindings:
 
 ```lua
 nide.bind("super+w", "spawn", "foot")
@@ -120,7 +119,7 @@ nide.bind("super+c", "close")
 nide.bind("super+shift+q", "quit")
 ```
 
-Contoh config:
+Example config:
 
 ```lua
 local terminal = "foot"
@@ -130,79 +129,78 @@ nide.bind("super+c", "close")
 nide.bind("super+shift+q", "quit")
 ```
 
-Formatnya:
+Format:
 
 ```lua
-nide.bind("modifier+tombol", "aksi", "argumen")
+nide.bind("modifier+key", "action", "argument")
 ```
 
-Modifier yang dikenal: `shift`, `ctrl`, `alt`, `super` (boleh digabung dengan
-`+`). Nama tombol mengikuti nama keysym XKB, misalnya `w`, `Return`, `space`,
+Recognized modifiers: `shift`, `ctrl`, `alt`, `super` (can be combined with
+`+`). Key names follow XKB keysym names, for example `w`, `Return`, `space`,
 `Left`, `1`, `bracketleft`.
 
-Aksi:
+Actions:
 
-| Aksi | Argumen | Efek |
+| Action | Argument | Effect |
 |---|---|---|
-| `spawn` | perintah shell | menjalankan program |
-| `close` | — | menutup jendela yang fokus |
-| `quit` | — | keluar dari compositor |
+| `spawn` | shell command | runs a program |
+| `close` | — | closes the focused window |
+| `quit` | — | quits the compositor |
 
-`nide.log(...)` bisa dipakai untuk mencetak pesan dari config:
+`nide.log(...)` can be used to print messages from the config:
 
 ```lua
-nide.log("NIDE siap")
+nide.log("NIDE ready")
 ```
 
-NIDE memantau file config aktif dan memuat ulang binding otomatis saat file
-disimpan. Jendela yang sedang terbuka tidak terpengaruh. Config yang error atau
-tidak punya keybinding diabaikan, config lama tetap dipakai. Kalau NIDE dimulai
-tanpa file config (mode bawaan), restart sekali setelah membuat file config.
+NIDE watches the active config file and reloads bindings automatically when
+the file is saved. Open windows are not affected. Configs with errors or no
+keybindings are ignored, and the previous config stays active. If NIDE starts
+without a config file (default mode), restart it once after creating a config.
 
-## Dekorasi dan perilaku jendela
+## Decorations and window behavior
 
-NIDE sengaja tidak menggambar dekorasi apa pun. Agar aplikasi juga tidak
-menggambar client-side decoration (CSD), NIDE meminta mode *server-side* tetapi
-tidak menggambar title bar/border. Hasilnya jendela benar-benar polos.
+NIDE deliberately draws no decorations. To keep applications from drawing
+client-side decorations (CSD), NIDE requests server-side mode but does not draw
+a title bar or border. The result is completely plain windows.
 
-Konsekuensinya:
+Consequences:
 
-- Tidak ada tombol close/minimize/maximize di jendela. Gunakan `Super+C`.
-- Pindahkan jendela dengan `Super+klik-kiri`, ubah ukuran dengan
-  `Super+klik-kanan`.
-- Jendela baru diletakkan di tengah dengan cascade kecil.
-- Fokus berpindah saat jendela diklik atau jendela baru dibuka.
+- There are no close/minimize/maximize buttons. Use `Super+C`.
+- Move windows with `Super+left-click`, resize with `Super+right-click`.
+- New windows are centered with a small cascade.
+- Focus changes when a window is clicked or a new window opens.
 
-## Batasan
+## Limitations
 
-- Hanya aplikasi Wayland native. XWayland tidak diaktifkan, jadi aplikasi X11
-  tidak bisa dijalankan.
-- Belum ada layer-shell, jadi bar/panel Wayland (Waybar, dll.) belum didukung.
-- Belum ada maximize, fullscreen, minimize, atau animasi.
-- Input method (IME) belum didukung.
-- Satu konfigurasi output; belum ada pengaturan posisi multi-monitor.
+- Wayland-native applications only. XWayland is not enabled, so X11
+  applications cannot run.
+- No layer-shell, so Wayland bars/panels (Waybar, etc.) are not supported.
+- No maximize, fullscreen, minimize, or animations.
+- No input method (IME) support.
+- Single output configuration; no manual multi-monitor positioning.
 
-## Struktur
+## Layout
 
 ```
-src/main.c        compositor + integrasi Lua
-config/config.lua contoh konfigurasi
-Docs.txt          panduan lengkap pemakaian dan konfigurasi
+src/main.c        compositor + Lua integration
+config/config.lua example configuration
+docs/manual.md    complete usage and configuration guide
 Makefile
-nide.desktop      entri sesi Wayland untuk display manager
+nide.desktop      Wayland session entry for display managers
 ```
 
-## Versi
+## Versioning
 
-NIDE memakai [Semantic Versioning](https://semver.org/lang/id/) dengan format
-`MAJOR.MINOR.PATCH`:
+NIDE uses [Semantic Versioning](https://semver.org/) with the
+`MAJOR.MINOR.PATCH` format:
 
-- `MAJOR` naik saat ada perubahan yang tidak kompatibel.
-- `MINOR` naik saat ada fitur baru yang tetap kompatibel.
-- `PATCH` naik saat ada perbaikan bug yang kompatibel.
+- `MAJOR` increases for incompatible changes.
+- `MINOR` increases for new backward-compatible features.
+- `PATCH` increases for backward-compatible bug fixes.
 
-Selama versi masih `0.x`, API config dianggap belum stabil. Perubahan yang
-mematahkan config lama akan menaikkan `MINOR`, misalnya `0.2.0` menjadi
-`0.3.0`, dan dicatat di [`CHANGELOG.md`](CHANGELOG.md).
+While the version is still `0.x`, the config API is considered unstable.
+Changes that break existing configs increase `MINOR`, for example `0.2.0` to
+`0.3.0`, and are documented in [`CHANGELOG.md`](CHANGELOG.md).
 
-Versi saat ini: **0.2.0**.
+Current version: **0.2.0**.

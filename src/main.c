@@ -1,9 +1,9 @@
 /*
- * NIDE (NIDE Isn't a Desktop) - compositor Wayland kecil berbasis wlroots.
+ * NIDE (NIDE Isn't a Desktop) - a small wlroots-based Wayland compositor.
  *
- * - Jendela floating (bukan tiling), tanpa dekorasi dari compositor.
- * - Konfigurasi keybinding memakai Lua, dengan hot reload.
- * - Super+W menjalankan terminal, Super+C menutup jendela yang fokus.
+ * - Floating windows (not tiling), with no compositor-side decorations.
+ * - Keybindings are configured in Lua, with hot reload.
+ * - Super+W launches a terminal, Super+C closes the focused window.
  */
 
 #include <errno.h>
@@ -194,7 +194,7 @@ struct nide_decoration {
 static void decoration_apply(struct nide_toplevel *toplevel);
 
 /* ------------------------------------------------------------------------- */
-/* Konfigurasi Lua                                                           */
+/* Lua configuration                                                         */
 /* ------------------------------------------------------------------------- */
 
 static bool parse_combo(const char *combo, uint32_t *mods_out,
@@ -257,7 +257,7 @@ static bool bind_set(struct nide_config *cfg, const char *combo,
 	xkb_keysym_t sym;
 
 	if (!parse_combo(combo, &mods, &sym)) {
-		snprintf(err, errsz, "kombinasi tidak valid: '%s'", combo);
+		snprintf(err, errsz, "invalid key combination: '%s'", combo);
 		return false;
 	}
 
@@ -266,7 +266,7 @@ static bool bind_set(struct nide_config *cfg, const char *combo,
 	if (strcmp(action, "spawn") == 0) {
 		act = NIDE_ACTION_SPAWN;
 		if (arg == NULL || *arg == '\0') {
-			snprintf(err, errsz, "aksi spawn butuh perintah");
+			snprintf(err, errsz, "spawn action requires a command");
 			return false;
 		}
 		command = arg;
@@ -276,7 +276,7 @@ static bool bind_set(struct nide_config *cfg, const char *combo,
 		act = NIDE_ACTION_QUIT;
 	} else {
 		snprintf(err, errsz,
-			"aksi tidak dikenal: '%s' (pakai spawn/close/quit)", action);
+			"unknown action: '%s' (use spawn/close/quit)", action);
 		return false;
 	}
 
@@ -289,7 +289,7 @@ static bool bind_set(struct nide_config *cfg, const char *combo,
 	}
 	if (slot == NULL) {
 		if (cfg->nbinds >= MAX_BINDS) {
-			snprintf(err, errsz, "terlalu banyak keybinding (maksimal %d)",
+			snprintf(err, errsz, "too many keybindings (maximum %d)",
 				MAX_BINDS);
 			return false;
 		}
@@ -312,10 +312,10 @@ static void config_defaults(struct nide_config *cfg) {
 	bind_set(cfg, "super+shift+q", "quit", NULL, err, sizeof(err));
 }
 
-static int l_wl_bind(lua_State *L) {
+static int l_nide_bind(lua_State *L) {
 	struct nide_config *cfg = lua_touserdata(L, lua_upvalueindex(1));
 	if (cfg == NULL) {
-		return luaL_error(L, "nide.bind: state tidak valid");
+		return luaL_error(L, "nide.bind: invalid state");
 	}
 
 	const char *combo = luaL_checkstring(L, 1);
@@ -329,7 +329,7 @@ static int l_wl_bind(lua_State *L) {
 	return 0;
 }
 
-static int l_wl_log(lua_State *L) {
+static int l_nide_log(lua_State *L) {
 	int n = lua_gettop(L);
 	luaL_Buffer buf;
 	luaL_buffinit(L, &buf);
@@ -353,7 +353,7 @@ static bool config_load(const char *path, struct nide_config *cfg,
 		char *err, size_t errsz) {
 	lua_State *L = luaL_newstate();
 	if (L == NULL) {
-		snprintf(err, errsz, "gagal membuat state Lua");
+		snprintf(err, errsz, "failed to create Lua state");
 		return false;
 	}
 	luaL_openlibs(L);
@@ -361,10 +361,10 @@ static bool config_load(const char *path, struct nide_config *cfg,
 	lua_newtable(L);
 
 	lua_pushlightuserdata(L, cfg);
-	lua_pushcclosure(L, l_wl_bind, 1);
+	lua_pushcclosure(L, l_nide_bind, 1);
 	lua_setfield(L, -2, "bind");
 
-	lua_pushcfunction(L, l_wl_log);
+	lua_pushcfunction(L, l_nide_log);
 	lua_setfield(L, -2, "log");
 
 	lua_pushstring(L, NIDE_VERSION);
@@ -375,7 +375,7 @@ static bool config_load(const char *path, struct nide_config *cfg,
 	if (luaL_loadfile(L, path) != LUA_OK ||
 			lua_pcall(L, 0, 0, 0) != LUA_OK) {
 		const char *msg = lua_tostring(L, -1);
-		snprintf(err, errsz, "%s", msg != NULL ? msg : "error Lua");
+		snprintf(err, errsz, "%s", msg != NULL ? msg : "Lua error");
 		lua_close(L);
 		return false;
 	}
@@ -452,19 +452,19 @@ static void config_reload(struct nide_server *server) {
 
 	if (!config_load(server->config_path, &config, err, sizeof(err))) {
 		wlr_log(WLR_ERROR,
-			"gagal memuat ulang config %s: %s (config lama dipakai)",
+			"failed to reload config %s: %s (keeping previous config)",
 			server->config_path, err);
 		return;
 	}
 	if (config.nbinds == 0) {
 		wlr_log(WLR_ERROR,
-			"config %s tidak punya keybinding, perubahan diabaikan",
+			"config %s has no keybindings, ignoring change",
 			server->config_path);
 		return;
 	}
 
 	server->config = config;
-	wlr_log(WLR_INFO, "config dimuat ulang: %s (%d keybinding)",
+	wlr_log(WLR_INFO, "config reloaded: %s (%d keybindings)",
 		server->config_path, config.nbinds);
 }
 
@@ -484,7 +484,7 @@ static int config_watch_event(int fd, uint32_t mask, void *data) {
 				continue;
 			}
 			if (errno != EAGAIN && errno != EWOULDBLOCK) {
-				wlr_log(WLR_ERROR, "gagal membaca inotify: %s",
+				wlr_log(WLR_ERROR, "failed to read inotify: %s",
 					strerror(errno));
 			}
 			break;
@@ -519,10 +519,10 @@ static int config_watch_event(int fd, uint32_t mask, void *data) {
 		config_reload(server);
 	} else if (deleted) {
 		wlr_log(WLR_INFO,
-			"config %s dihapus/dipindahkan; config lama tetap dipakai",
+			"config %s deleted/moved; keeping previous config",
 			server->config_path);
 	} else if (ignored) {
-		wlr_log(WLR_ERROR, "pemantauan config %s berhenti",
+		wlr_log(WLR_ERROR, "stopped watching config %s",
 			server->config_path);
 	}
 
@@ -550,7 +550,7 @@ static void config_watch_init(struct nide_server *server, const char *path) {
 		size_t len = (size_t)(slash - path);
 		if (len >= sizeof(dir)) {
 			wlr_log(WLR_ERROR,
-				"path config terlalu panjang, hot reload mati");
+				"config path is too long, hot reload disabled");
 			return;
 		}
 		memcpy(dir, path, len);
@@ -559,14 +559,14 @@ static void config_watch_init(struct nide_server *server, const char *path) {
 	}
 
 	if (*name == '\0' || strlen(name) > NAME_MAX) {
-		wlr_log(WLR_ERROR, "nama file config tidak valid, hot reload mati");
+		wlr_log(WLR_ERROR, "invalid config file name, hot reload disabled");
 		return;
 	}
 	snprintf(server->config_name, sizeof(server->config_name), "%s", name);
 
 	int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (fd < 0) {
-		wlr_log(WLR_ERROR, "inotify gagal, hot reload nonaktif: %s",
+		wlr_log(WLR_ERROR, "inotify failed, hot reload disabled: %s",
 			strerror(errno));
 		return;
 	}
@@ -575,7 +575,7 @@ static void config_watch_init(struct nide_server *server, const char *path) {
 		IN_CLOSE_WRITE | IN_MOVED_TO |
 		IN_DELETE | IN_MOVED_FROM | IN_ONLYDIR);
 	if (wd < 0) {
-		wlr_log(WLR_ERROR, "gagal memantau folder config %s: %s",
+		wlr_log(WLR_ERROR, "failed to watch config directory %s: %s",
 			dir, strerror(errno));
 		close(fd);
 		return;
@@ -585,7 +585,7 @@ static void config_watch_init(struct nide_server *server, const char *path) {
 	struct wl_event_source *source = wl_event_loop_add_fd(loop, fd,
 		WL_EVENT_READABLE, config_watch_event, server);
 	if (source == NULL) {
-		wlr_log(WLR_ERROR, "gagal mendaftarkan hot reload ke event loop");
+		wlr_log(WLR_ERROR, "failed to register hot reload with the event loop");
 		inotify_rm_watch(fd, wd);
 		close(fd);
 		return;
@@ -594,11 +594,11 @@ static void config_watch_init(struct nide_server *server, const char *path) {
 	server->config_watch_fd = fd;
 	server->config_watch_wd = wd;
 	server->config_watch = source;
-	wlr_log(WLR_INFO, "hot reload aktif untuk %s", server->config_path);
+	wlr_log(WLR_INFO, "hot reload active for %s", server->config_path);
 }
 
 /* ------------------------------------------------------------------------- */
-/* Utilitas                                                                  */
+/* Utilities                                                                 */
 /* ------------------------------------------------------------------------- */
 
 static void spawn_command(const char *cmd) {
@@ -606,7 +606,7 @@ static void spawn_command(const char *cmd) {
 		return;
 	}
 
-	wlr_log(WLR_INFO, "menjalankan: %s", cmd);
+	wlr_log(WLR_INFO, "running: %s", cmd);
 	pid_t pid = fork();
 	if (pid == 0) {
 		setsid();
@@ -735,7 +735,7 @@ static void place_toplevel(struct nide_toplevel *toplevel) {
 	}
 
 	wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
-	wlr_log(WLR_DEBUG, "penempatan jendela: %dx%d+%d+%d (geometry %dx%d+%d+%d)",
+	wlr_log(WLR_DEBUG, "window placement: %dx%d+%d+%d (geometry %dx%d+%d+%d)",
 		width, height, x, y, geo->width, geo->height, geo->x, geo->y);
 }
 
@@ -841,7 +841,7 @@ static void process_cursor_motion(struct nide_server *server, uint32_t time) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* Handler input                                                             */
+/* Input handlers                                                            */
 /* ------------------------------------------------------------------------- */
 
 static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) {
@@ -861,9 +861,9 @@ static void run_bind(struct nide_server *server, struct nide_bind *bind) {
 		break;
 	case NIDE_ACTION_CLOSE:
 		if (server->focused != NULL) {
-			wlr_log(WLR_INFO, "menutup jendela: %s",
+			wlr_log(WLR_INFO, "closing window: %s",
 				server->focused->xdg_toplevel->title != NULL
-					? server->focused->xdg_toplevel->title : "(tanpa judul)");
+					? server->focused->xdg_toplevel->title : "(untitled)");
 			wlr_xdg_toplevel_send_close(server->focused->xdg_toplevel);
 		}
 		break;
@@ -1408,7 +1408,7 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* Dekorasi: compositor tidak menggambar title bar / border sama sekali.     */
+/* Decorations: the compositor draws no title bar or border at all.          */
 /* ------------------------------------------------------------------------- */
 
 static void decoration_apply(struct nide_toplevel *toplevel) {
@@ -1423,10 +1423,10 @@ static void decoration_apply(struct nide_toplevel *toplevel) {
 	}
 
 	/*
-	 * Minta mode server-side, tetapi jangan menggambar dekorasi apa pun.
-	 * Dengan begitu klien tidak menambahkan CSD sendiri, sehingga jendela
-	 * benar-benar polos tanpa title bar atau tombol. Tutup jendela dengan
-	 * Super+C, pindahkan dengan Super+klik-kiri.
+	 * Request server-side mode, but do not draw any decorations.
+	 * This prevents clients from adding their own CSD, so windows stay
+	 * completely plain with no title bar or buttons. Close windows with
+	 * Super+C, move them with Super+Left-click.
 	 */
 	wlr_xdg_toplevel_decoration_v1_set_mode(deco->decoration,
 		WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
@@ -1487,7 +1487,7 @@ static int handle_signal(int signo, void *data) {
 }
 
 static void print_bindings(const struct nide_config *cfg) {
-	printf("Keybinding (%d):\n", cfg->nbinds);
+	printf("Keybindings (%d):\n", cfg->nbinds);
 	for (int i = 0; i < cfg->nbinds; i++) {
 		const struct nide_bind *bind = &cfg->binds[i];
 		const char *action = "?";
@@ -1507,11 +1507,11 @@ static void print_bindings(const struct nide_config *cfg) {
 static void usage(FILE *stream, const char *prog) {
 	fprintf(stream,
 		"Usage: %s [options]\n"
-		"  -c, --config PATH  file konfigurasi Lua\n"
-		"  -C, --check        cek konfigurasi lalu keluar\n"
-		"  -d, --debug        log debug wlroots\n"
-		"  -v, --version      tampilkan versi\n"
-		"  -h, --help         tampilkan bantuan\n",
+		"  -c, --config PATH  Lua configuration file\n"
+		"  -C, --check        validate configuration and exit\n"
+		"  -d, --debug        wlroots debug logging\n"
+		"  -v, --version      print version\n"
+		"  -h, --help         print help\n",
 		prog);
 }
 
@@ -1569,26 +1569,26 @@ int main(int argc, char *argv[]) {
 	if (have_config) {
 		char err[512];
 		if (!config_load(config_path, &config, err, sizeof(err))) {
-			fprintf(stderr, "nide: gagal memuat config %s: %s\n",
+			fprintf(stderr, "nide: failed to load config %s: %s\n",
 				config_path, err);
 			return 1;
 		}
 	} else {
 		if (config_required) {
-			fprintf(stderr, "nide: config tidak ditemukan: %s\n",
+			fprintf(stderr, "nide: config not found: %s\n",
 				config_path);
 			return 1;
 		}
 		config_defaults(&config);
-		wlr_log(WLR_INFO, "config tidak ditemukan, memakai binding bawaan");
+		wlr_log(WLR_INFO, "config not found, using default keybindings");
 	}
 
 	if (config.nbinds == 0) {
-		wlr_log(WLR_ERROR, "config tidak memiliki keybinding");
+		wlr_log(WLR_ERROR, "config has no keybindings");
 	}
 
 	if (check_only) {
-		printf("Config : %s\n", have_config ? config_path : "(bawaan)");
+		printf("Config: %s\n", have_config ? config_path : "(default)");
 		print_bindings(&config);
 		return 0;
 	}
@@ -1607,21 +1607,21 @@ int main(int argc, char *argv[]) {
 
 	server.display = wl_display_create();
 	if (server.display == NULL) {
-		wlr_log(WLR_ERROR, "gagal membuat Wayland display");
+		wlr_log(WLR_ERROR, "failed to create Wayland display");
 		return 1;
 	}
 
 	server.backend = wlr_backend_autocreate(
 		wl_display_get_event_loop(server.display), NULL);
 	if (server.backend == NULL) {
-		wlr_log(WLR_ERROR, "gagal membuat backend");
+		wlr_log(WLR_ERROR, "failed to create backend");
 		wl_display_destroy(server.display);
 		return 1;
 	}
 
 	server.renderer = wlr_renderer_autocreate(server.backend);
 	if (server.renderer == NULL) {
-		wlr_log(WLR_ERROR, "gagal membuat renderer");
+		wlr_log(WLR_ERROR, "failed to create renderer");
 		wlr_backend_destroy(server.backend);
 		wl_display_destroy(server.display);
 		return 1;
@@ -1630,7 +1630,7 @@ int main(int argc, char *argv[]) {
 
 	server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
 	if (server.allocator == NULL) {
-		wlr_log(WLR_ERROR, "gagal membuat allocator");
+		wlr_log(WLR_ERROR, "failed to create allocator");
 		wlr_renderer_destroy(server.renderer);
 		wlr_backend_destroy(server.backend);
 		wl_display_destroy(server.display);
@@ -1706,7 +1706,7 @@ int main(int argc, char *argv[]) {
 
 	const char *socket = wl_display_add_socket_auto(server.display);
 	if (socket == NULL) {
-		wlr_log(WLR_ERROR, "gagal membuat Wayland socket");
+		wlr_log(WLR_ERROR, "failed to create Wayland socket");
 		wlr_xcursor_manager_destroy(server.cursor_mgr);
 		wlr_cursor_destroy(server.cursor);
 		wlr_scene_node_destroy(&server.scene->tree.node);
@@ -1718,7 +1718,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (!wlr_backend_start(server.backend)) {
-		wlr_log(WLR_ERROR, "gagal menjalankan backend");
+		wlr_log(WLR_ERROR, "failed to start backend");
 		wl_display_destroy(server.display);
 		return 1;
 	}
@@ -1732,8 +1732,8 @@ int main(int argc, char *argv[]) {
 
 	config_watch_init(&server, config_path);
 
-	wlr_log(WLR_INFO, "NIDE berjalan di WAYLAND_DISPLAY=%s", socket);
-	wlr_log(WLR_INFO, "%d keybinding aktif", server.config.nbinds);
+	wlr_log(WLR_INFO, "NIDE running on WAYLAND_DISPLAY=%s", socket);
+	wlr_log(WLR_INFO, "%d keybindings active", server.config.nbinds);
 
 	wl_display_run(server.display);
 

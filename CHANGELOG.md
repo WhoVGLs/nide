@@ -1,39 +1,41 @@
 # Changelog
 
-Semua perubahan penting pada NIDE dicatat di file ini.
+All notable changes to NIDE are documented in this file.
 
-Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/),
-dan versi mengikuti [Semantic Versioning](https://semver.org/lang/id/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.2.0] "Jendela" - 2026-11-14
 
-Rilis pertama dengan nama NIDE. Sebelumnya proyek ini bernama wlua.
+First release under the NIDE name. The project was previously called wlua.
 
 ### Added
 
-- Hot reload config memakai inotify: binding dimuat ulang otomatis saat file
-  config disimpan, termasuk penyimpanan atomic (rename) ala vim dan nano.
-- Config invalid, config tanpa keybinding, atau config yang dihapus tidak
-  mengganti config aktif; error dicatat ke log.
-- `CHANGELOG.md` dan kebijakan Semantic Versioning.
+- Config hot reload using inotify: bindings reload automatically when the
+  config file is saved, including atomic saves (rename) used by vim and nano.
+- Invalid configs, configs without keybindings, and deleted configs do not
+  replace the active config; errors are logged.
+- `CHANGELOG.md` and Semantic Versioning policy.
 
 ### Changed
 
-- Nama proyek, binary, dan entri sesi Wayland menjadi NIDE / `nide`.
-- API Lua berubah dari `wl.*` menjadi `nide.*` tanpa alias kompatibilitas.
-- Path config menjadi `~/.config/nide/config.lua`; environment menjadi
+- Project, binary, and Wayland session entry renamed to NIDE / `nide`.
+- Lua API changed from `wl.*` to `nide.*` without a compatibility alias.
+- Config path is now `~/.config/nide/config.lua`; environment variable is
   `NIDE_CONFIG`.
-- Path install menjadi `/usr/bin/nide`, `/usr/share/nide/config.lua`, dan
+- Install paths are now `/usr/bin/nide`, `/usr/share/nide/config.lua`, and
   `/usr/share/wayland-sessions/nide.desktop`.
-- `XDG_CURRENT_DESKTOP` menjadi `nide`.
-- Versi mengikuti SemVer dan dimulai dari `0.2.0`.
+- `XDG_CURRENT_DESKTOP` is now `nide`.
+- Versions follow SemVer, starting at `0.2.0`.
+- Documentation, source comments, and user-facing messages translated to
+  English.
 
 ## [0.1.0] - 2026-11-13
 
-Rilis awal dengan nama wlua.
+Initial release under the name wlua.
 
-- Compositor Wayland floating berbasis wlroots 0.20.
-- Tanpa dekorasi dari compositor (tanpa title bar, border, atau tombol jendela).
-- Keybinding dikonfigurasi dengan Lua.
-- `Super+W` membuka terminal, `Super+C` menutup jendela yang fokus.
-- Dukungan clipboard dan primary selection.
+- Floating Wayland compositor based on wlroots 0.20.
+- No compositor-side decorations (no title bar, border, or window buttons).
+- Lua-configured keybindings.
+- `Super+W` opens a terminal, `Super+C` closes the focused window.
+- Clipboard and primary selection support.

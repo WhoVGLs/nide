@@ -1,28 +1,28 @@
--- Konfigurasi NIDE
--- Salin file ini ke ~/.config/nide/config.lua, lalu sesuaikan.
+-- NIDE configuration
+-- Copy this file to ~/.config/nide/config.lua and adjust it.
 --
--- Format binding:
---   nide.bind("modifier+tombol", "aksi", "argumen")
+-- Binding format:
+--   nide.bind("modifier+key", "action", "argument")
 --
--- Modifier: shift, ctrl, alt, super (bisa digabung dengan +).
--- Aksi     : spawn (jalankan perintah), close (tutup jendela fokus), quit.
+-- Modifiers: shift, ctrl, alt, super (can be combined with +).
+-- Actions  : spawn (run a command), close (close the focused window), quit.
 
--- Ganti dengan terminal Wayland favoritmu: foot, kitty, alacritty, dll.
+-- Replace with your favorite Wayland terminal: foot, kitty, alacritty, etc.
 local terminal = "dolphin"
 local file = "dolphin"
 
--- Super+W membuka terminal.
+-- Super+W opens a terminal.
 nide.bind("super+w", "spawn", terminal)
 
--- Super+F membuka File Exploler
+-- Super+F opens the file manager.
 nide.bind("super+f", "spawn", file)
 
--- Super+C menutup aplikasi/jendela yang sedang fokus.
+-- Super+C closes the focused application/window.
 nide.bind("super+c", "close")
 
--- Tambahan: keluar dari compositor.
+-- Optional: quit the compositor.
 nide.bind("super+shift+q", "quit")
 
--- Kamu juga bisa menambah binding lain, misalnya:
+-- You can add more bindings, for example:
 -- nide.bind("super+Return", "spawn", terminal)
 -- nide.bind("super+d", "spawn", "fuzzel")
