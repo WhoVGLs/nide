@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=NIDE
+Comment=NIDE isn't a Desktop - compositor Wayland floating, dikonfigurasi dengan Lua
+Exec=nide
+Type=Application
+DesktopNames=nide
