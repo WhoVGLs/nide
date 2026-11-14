@@ -44,10 +44,14 @@ make
 Pasang ke sistem (opsional):
 
 ```sh
-sudo make install
+sudo make install PREFIX=/usr
 mkdir -p ~/.config/nide
 cp config/config.lua ~/.config/nide/config.lua
 ```
+
+`PREFIX=/usr` diperlukan agar display manager menemukan
+`/usr/share/wayland-sessions/nide.desktop`. Tanpa itu, file terpasang di
+`/usr/local` dan sesi NIDE mungkin tidak muncul di SDDM.
 
 ## Menjalankan
 
