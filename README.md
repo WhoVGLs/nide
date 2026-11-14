@@ -5,6 +5,8 @@ namanya begitu, NIDE adalah compositor Wayland kecil dan sederhana, dibangun
 dengan [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 dan
 dikonfigurasi penuh memakai Lua.
 
+Rilis saat ini: **NIDE 0.2.0 "Jendela"**.
+
 Konfigurasi yang dipakai proyek ini ada di satu file:
 [`config/config.lua`](config/config.lua). Panduan lengkap pemakaian dan
 konfigurasi ada di [`Docs.txt`](Docs.txt).
@@ -189,4 +191,14 @@ Selama versi masih `0.x`, API config dianggap belum stabil. Perubahan yang
 mematahkan config lama akan menaikkan `MINOR`, misalnya `0.2.0` menjadi
 `0.3.0`, dan dicatat di [`CHANGELOG.md`](CHANGELOG.md).
 
-Versi saat ini: **0.2.0**.
+### Codename rilis
+
+Seperti sistem operasi besar, setiap rilis NIDE punya codename unik
+berbahasa Indonesia. Codename menempel pada rilis `MINOR`; patch release
+memakai codename yang sama dengan rilis `MINOR`-nya.
+
+| Versi | Codename |
+|---|---|
+| `0.2.0` | **Jendela** |
+
+Versi saat ini: **0.2.0 "Jendela"**.

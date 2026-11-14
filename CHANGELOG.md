@@ -5,7 +5,10 @@ Semua perubahan penting pada NIDE dicatat di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/),
 dan versi mengikuti [Semantic Versioning](https://semver.org/lang/id/).
 
-## [0.2.0] - 2026-11-14
+Setiap rilis `MINOR` mendapat codename unik berbahasa Indonesia. Patch
+release memakai codename yang sama dengan rilis `MINOR`-nya.
+
+## [0.2.0] "Jendela" - 2026-11-14
 
 Rilis pertama dengan nama NIDE. Sebelumnya proyek ini bernama wlua.
 
