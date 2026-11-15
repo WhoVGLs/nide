@@ -4,6 +4,7 @@
  * - Floating windows (not tiling), with no compositor-side decorations.
  * - Keybindings are configured in Lua, with hot reload.
  * - Super+W launches a terminal, Super+C closes the focused window.
+ * - Super+M maximizes (with a configurable margin), Super+S toggles fullscreen.
  */
 
 #include <errno.h>
@@ -52,8 +53,11 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 
-#define NIDE_VERSION "0.2.0"
+#define NIDE_VERSION "0.3.0"
 #define MAX_BINDS 64
+#define NIDE_MAXIMIZE_MARGIN_DEFAULT 8
+#define NIDE_SNAP_THRESHOLD 24
+#define NIDE_SNAP_BREAKOUT 16
 
 #define NIDE_MOD_MASK \
 	(WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO)
@@ -61,6 +65,8 @@
 enum nide_action {
 	NIDE_ACTION_SPAWN,
 	NIDE_ACTION_CLOSE,
+	NIDE_ACTION_MAXIMIZE,
+	NIDE_ACTION_FULLSCREEN,
 	NIDE_ACTION_QUIT,
 };
 
@@ -68,6 +74,14 @@ enum nide_cursor_mode {
 	NIDE_CURSOR_PASSTHROUGH,
 	NIDE_CURSOR_MOVE,
 	NIDE_CURSOR_RESIZE,
+};
+
+enum nide_toplevel_state {
+	NIDE_TOPLEVEL_FLOATING,
+	NIDE_TOPLEVEL_SNAPPED_LEFT,
+	NIDE_TOPLEVEL_SNAPPED_RIGHT,
+	NIDE_TOPLEVEL_MAXIMIZED,
+	NIDE_TOPLEVEL_FULLSCREEN,
 };
 
 struct nide_bind {
@@ -81,6 +95,7 @@ struct nide_bind {
 struct nide_config {
 	struct nide_bind binds[MAX_BINDS];
 	int nbinds;
+	int maximize_margin;
 };
 
 struct nide_server;
@@ -97,6 +112,7 @@ struct nide_server {
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
 	struct wl_listener new_output;
+	struct wl_listener output_layout_change;
 
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
@@ -157,6 +173,16 @@ struct nide_toplevel {
 	struct wlr_xdg_toplevel *xdg_toplevel;
 	struct wlr_scene_tree *scene_tree;
 	bool mapped;
+	bool placed;
+	bool pending_maximize;
+	bool pending_fullscreen;
+	enum nide_toplevel_state state;
+	enum nide_toplevel_state restore_state;
+	struct wlr_box floating_geometry;
+	bool has_floating_geometry;
+	bool restore_floating_pending;
+	bool snap_suppressed;
+	double snap_anchor_x;
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -192,6 +218,8 @@ struct nide_decoration {
 };
 
 static void decoration_apply(struct nide_toplevel *toplevel);
+static void toplevel_capture_floating(struct nide_toplevel *toplevel);
+static void toplevel_reapply_state(struct nide_toplevel *toplevel);
 
 /* ------------------------------------------------------------------------- */
 /* Lua configuration                                                         */
@@ -272,11 +300,16 @@ static bool bind_set(struct nide_config *cfg, const char *combo,
 		command = arg;
 	} else if (strcmp(action, "close") == 0) {
 		act = NIDE_ACTION_CLOSE;
+	} else if (strcmp(action, "maximize") == 0) {
+		act = NIDE_ACTION_MAXIMIZE;
+	} else if (strcmp(action, "fullscreen") == 0) {
+		act = NIDE_ACTION_FULLSCREEN;
 	} else if (strcmp(action, "quit") == 0) {
 		act = NIDE_ACTION_QUIT;
 	} else {
 		snprintf(err, errsz,
-			"unknown action: '%s' (use spawn/close/quit)", action);
+			"unknown action: '%s' "
+			"(use spawn/close/maximize/fullscreen/quit)", action);
 		return false;
 	}
 
@@ -307,8 +340,11 @@ static bool bind_set(struct nide_config *cfg, const char *combo,
 
 static void config_defaults(struct nide_config *cfg) {
 	char err[256];
+	cfg->maximize_margin = NIDE_MAXIMIZE_MARGIN_DEFAULT;
 	bind_set(cfg, "super+w", "spawn", "foot", err, sizeof(err));
 	bind_set(cfg, "super+c", "close", NULL, err, sizeof(err));
+	bind_set(cfg, "super+m", "maximize", NULL, err, sizeof(err));
+	bind_set(cfg, "super+s", "fullscreen", NULL, err, sizeof(err));
 	bind_set(cfg, "super+shift+q", "quit", NULL, err, sizeof(err));
 }
 
@@ -351,6 +387,8 @@ static int l_nide_log(lua_State *L) {
 
 static bool config_load(const char *path, struct nide_config *cfg,
 		char *err, size_t errsz) {
+	cfg->maximize_margin = NIDE_MAXIMIZE_MARGIN_DEFAULT;
+
 	lua_State *L = luaL_newstate();
 	if (L == NULL) {
 		snprintf(err, errsz, "failed to create Lua state");
@@ -367,6 +405,9 @@ static bool config_load(const char *path, struct nide_config *cfg,
 	lua_pushcfunction(L, l_nide_log);
 	lua_setfield(L, -2, "log");
 
+	lua_pushinteger(L, cfg->maximize_margin);
+	lua_setfield(L, -2, "maximize_margin");
+
 	lua_pushstring(L, NIDE_VERSION);
 	lua_setfield(L, -2, "version");
 
@@ -378,6 +419,27 @@ static bool config_load(const char *path, struct nide_config *cfg,
 		snprintf(err, errsz, "%s", msg != NULL ? msg : "Lua error");
 		lua_close(L);
 		return false;
+	}
+
+	lua_getglobal(L, "nide");
+	if (lua_istable(L, -1)) {
+		lua_getfield(L, -1, "maximize_margin");
+		if (!lua_isnil(L, -1)) {
+			if (!lua_isnumber(L, -1)) {
+				snprintf(err, errsz,
+					"nide.maximize_margin must be a number");
+				lua_close(L);
+				return false;
+			}
+			int margin = (int)lua_tointeger(L, -1);
+			if (margin < 0 || margin > 512) {
+				snprintf(err, errsz,
+					"nide.maximize_margin must be between 0 and 512");
+				lua_close(L);
+				return false;
+			}
+			cfg->maximize_margin = margin;
+		}
 	}
 
 	lua_close(L);
@@ -463,7 +525,22 @@ static void config_reload(struct nide_server *server) {
 		return;
 	}
 
+	int previous_margin = server->config.maximize_margin;
 	server->config = config;
+
+	if (config.maximize_margin != previous_margin) {
+		struct nide_toplevel *toplevel;
+		wl_list_for_each(toplevel, &server->toplevels, link) {
+			if (toplevel->state == NIDE_TOPLEVEL_MAXIMIZED ||
+					toplevel->state ==
+						NIDE_TOPLEVEL_SNAPPED_LEFT ||
+					toplevel->state ==
+						NIDE_TOPLEVEL_SNAPPED_RIGHT) {
+				toplevel_reapply_state(toplevel);
+			}
+		}
+	}
+
 	wlr_log(WLR_INFO, "config reloaded: %s (%d keybindings)",
 		server->config_path, config.nbinds);
 }
@@ -693,6 +770,401 @@ static void focus_next_toplevel(struct nide_server *server) {
 	focus_toplevel(next);
 }
 
+static struct wlr_box toplevel_geometry(struct nide_toplevel *toplevel) {
+	struct wlr_box geo = toplevel->xdg_toplevel->base->geometry;
+	int width = geo.width > 0 ? geo.width : 800;
+	int height = geo.height > 0 ? geo.height : 600;
+
+	return (struct wlr_box) {
+		.x = (int)toplevel->scene_tree->node.x + geo.x,
+		.y = (int)toplevel->scene_tree->node.y + geo.y,
+		.width = width,
+		.height = height,
+	};
+}
+
+static struct wlr_box toplevel_output_box(struct nide_toplevel *toplevel,
+		struct wlr_output *preferred) {
+	struct nide_server *server = toplevel->server;
+	struct wlr_box box = {0};
+
+	if (preferred != NULL) {
+		wlr_output_layout_get_box(server->output_layout, preferred, &box);
+		if (box.width > 0 && box.height > 0) {
+			return box;
+		}
+	}
+
+	struct wlr_box geo = toplevel_geometry(toplevel);
+	struct wlr_output *output = wlr_output_layout_output_at(
+		server->output_layout, geo.x + geo.width / 2.0,
+		geo.y + geo.height / 2.0);
+	if (output == NULL) {
+		output = wlr_output_layout_output_at(server->output_layout,
+			server->cursor->x, server->cursor->y);
+	}
+	if (output != NULL) {
+		wlr_output_layout_get_box(server->output_layout, output, &box);
+	}
+	if (box.width <= 0 || box.height <= 0) {
+		box = (struct wlr_box) {
+			.x = 0, .y = 0, .width = 1024, .height = 768,
+		};
+	}
+	return box;
+}
+
+static struct wlr_box inset_box(struct wlr_box box, int margin) {
+	int x_margin = margin * 2 < box.width ? margin : 0;
+	int y_margin = margin * 2 < box.height ? margin : 0;
+
+	box.x += x_margin;
+	box.y += y_margin;
+	box.width -= x_margin * 2;
+	box.height -= y_margin * 2;
+	return box;
+}
+
+static void toplevel_apply_box(struct nide_toplevel *toplevel,
+		struct wlr_box box, bool resize) {
+	struct wlr_box *geo = &toplevel->xdg_toplevel->base->geometry;
+
+	if (box.width < 1) {
+		box.width = 1;
+	}
+	if (box.height < 1) {
+		box.height = 1;
+	}
+
+	wlr_scene_node_set_position(&toplevel->scene_tree->node,
+		box.x - geo->x, box.y - geo->y);
+	if (resize) {
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+			box.width, box.height);
+	}
+}
+
+static void toplevel_capture_floating(struct nide_toplevel *toplevel) {
+	struct wlr_box box = toplevel_geometry(toplevel);
+
+	/*
+	 * A state change may still be waiting for the client to acknowledge the
+	 * configure. Keep the saved size in that case: the current surface
+	 * geometry still belongs to the previous state.
+	 */
+	if (toplevel->restore_floating_pending &&
+			toplevel->has_floating_geometry) {
+		box.width = toplevel->floating_geometry.width;
+		box.height = toplevel->floating_geometry.height;
+	}
+
+	toplevel->floating_geometry = box;
+	toplevel->has_floating_geometry = true;
+}
+
+static struct wlr_box toplevel_snap_box(struct nide_toplevel *toplevel) {
+	struct wlr_box box = toplevel_output_box(toplevel, NULL);
+	int margin = toplevel->server->config.maximize_margin;
+	int x_margin = margin * 2 < box.width ? margin : 0;
+	int y_margin = margin * 2 < box.height ? margin : 0;
+	int half = box.width / 2;
+	int x;
+	int width;
+
+	if (toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT) {
+		x = box.x + x_margin;
+		width = half - x_margin;
+	} else {
+		x = box.x + half;
+		width = box.width - half - x_margin;
+	}
+
+	if (width < 1) {
+		width = 1;
+	}
+
+	return (struct wlr_box) {
+		.x = x,
+		.y = box.y + y_margin,
+		.width = width,
+		.height = box.height - y_margin * 2,
+	};
+}
+
+static void toplevel_apply_snap(struct nide_toplevel *toplevel) {
+	struct wlr_box box = toplevel_snap_box(toplevel);
+	uint32_t tiled = WLR_EDGE_TOP | WLR_EDGE_BOTTOM;
+	if (toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT) {
+		tiled |= WLR_EDGE_LEFT;
+	} else {
+		tiled |= WLR_EDGE_RIGHT;
+	}
+
+	wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
+	wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+	wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, tiled);
+	toplevel_apply_box(toplevel, box, true);
+
+	wlr_log(WLR_DEBUG, "snapped geometry: %dx%d+%d+%d",
+		box.width, box.height, box.x, box.y);
+}
+
+static void toplevel_apply_maximized(struct nide_toplevel *toplevel) {
+	struct wlr_box box = inset_box(toplevel_output_box(toplevel, NULL),
+		toplevel->server->config.maximize_margin);
+
+	wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
+	wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
+	wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
+	toplevel_apply_box(toplevel, box, true);
+
+	wlr_log(WLR_DEBUG, "maximized geometry: %dx%d+%d+%d (margin %d)",
+		box.width, box.height, box.x, box.y,
+		toplevel->server->config.maximize_margin);
+}
+
+static void toplevel_apply_fullscreen(struct nide_toplevel *toplevel,
+		struct wlr_output *output) {
+	struct wlr_box box = toplevel_output_box(toplevel, output);
+
+	wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+	wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
+	wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
+	toplevel_apply_box(toplevel, box, true);
+
+	wlr_log(WLR_DEBUG, "fullscreen geometry: %dx%d+%d+%d",
+		box.width, box.height, box.x, box.y);
+}
+
+static void toplevel_apply_floating(struct nide_toplevel *toplevel) {
+	struct wlr_box box = toplevel->floating_geometry;
+	if (box.width < 1 || box.height < 1) {
+		box.width = box.width > 0 ? box.width : 800;
+		box.height = box.height > 0 ? box.height : 600;
+		toplevel->floating_geometry = box;
+	}
+
+	toplevel->state = NIDE_TOPLEVEL_FLOATING;
+	toplevel->restore_floating_pending = true;
+	wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
+	wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+	wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
+	toplevel_apply_box(toplevel, box, true);
+}
+
+static void toplevel_enter_maximized(struct nide_toplevel *toplevel) {
+	if (toplevel->state == NIDE_TOPLEVEL_MAXIMIZED ||
+			toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
+		return;
+	}
+
+	if (toplevel->state == NIDE_TOPLEVEL_FLOATING) {
+		toplevel_capture_floating(toplevel);
+	}
+	toplevel->restore_state = toplevel->state;
+	toplevel->state = NIDE_TOPLEVEL_MAXIMIZED;
+	toplevel_apply_maximized(toplevel);
+
+	wlr_log(WLR_DEBUG, "maximized window (margin %d)",
+		toplevel->server->config.maximize_margin);
+}
+
+static void toplevel_leave_maximized(struct nide_toplevel *toplevel) {
+	if (toplevel->state != NIDE_TOPLEVEL_MAXIMIZED) {
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+		return;
+	}
+
+	if (toplevel->restore_state == NIDE_TOPLEVEL_SNAPPED_LEFT ||
+			toplevel->restore_state == NIDE_TOPLEVEL_SNAPPED_RIGHT) {
+		toplevel->state = toplevel->restore_state;
+		toplevel_apply_snap(toplevel);
+	} else {
+		toplevel_apply_floating(toplevel);
+	}
+}
+
+static void toplevel_enter_fullscreen(struct nide_toplevel *toplevel) {
+	if (toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
+		return;
+	}
+
+	if (toplevel->state == NIDE_TOPLEVEL_FLOATING) {
+		toplevel_capture_floating(toplevel);
+	}
+	toplevel->restore_state = toplevel->state;
+	toplevel->state = NIDE_TOPLEVEL_FULLSCREEN;
+
+	struct wlr_output *output =
+		toplevel->xdg_toplevel->requested.fullscreen_output;
+	toplevel_apply_fullscreen(toplevel, output);
+
+	wlr_log(WLR_DEBUG, "fullscreen window");
+}
+
+static void toplevel_leave_fullscreen(struct nide_toplevel *toplevel) {
+	if (toplevel->state != NIDE_TOPLEVEL_FULLSCREEN) {
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
+		return;
+	}
+
+	switch (toplevel->restore_state) {
+	case NIDE_TOPLEVEL_MAXIMIZED:
+		toplevel->state = NIDE_TOPLEVEL_MAXIMIZED;
+		toplevel_apply_maximized(toplevel);
+		break;
+	case NIDE_TOPLEVEL_SNAPPED_LEFT:
+	case NIDE_TOPLEVEL_SNAPPED_RIGHT:
+		toplevel->state = toplevel->restore_state;
+		toplevel_apply_snap(toplevel);
+		break;
+	default:
+		toplevel_apply_floating(toplevel);
+		break;
+	}
+}
+
+static void toplevel_toggle_maximized(struct nide_toplevel *toplevel) {
+	if (toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
+		if (toplevel->restore_state == NIDE_TOPLEVEL_MAXIMIZED) {
+			toplevel_leave_fullscreen(toplevel);
+			return;
+		}
+
+		/*
+		 * Do not restore floating geometry first: the client would still
+		 * report its fullscreen size and we would overwrite the saved
+		 * floating size with it.
+		 */
+		toplevel->state = NIDE_TOPLEVEL_MAXIMIZED;
+		toplevel_apply_maximized(toplevel);
+		return;
+	}
+	if (toplevel->state == NIDE_TOPLEVEL_MAXIMIZED) {
+		toplevel_leave_maximized(toplevel);
+	} else {
+		toplevel_enter_maximized(toplevel);
+	}
+}
+
+static void toplevel_toggle_fullscreen(struct nide_toplevel *toplevel) {
+	if (toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
+		toplevel_leave_fullscreen(toplevel);
+	} else {
+		toplevel_enter_fullscreen(toplevel);
+	}
+}
+
+static void toplevel_to_floating(struct nide_toplevel *toplevel,
+		bool keep_current_geometry) {
+	if (toplevel->state == NIDE_TOPLEVEL_FLOATING) {
+		return;
+	}
+
+	if (keep_current_geometry) {
+		toplevel_capture_floating(toplevel);
+		toplevel->state = NIDE_TOPLEVEL_FLOATING;
+		toplevel->restore_floating_pending = false;
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+		wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
+	} else {
+		toplevel_apply_floating(toplevel);
+	}
+}
+
+static void toplevel_break_snap(struct nide_toplevel *toplevel) {
+	struct nide_server *server = toplevel->server;
+	struct wlr_box box = toplevel->floating_geometry;
+
+	if (box.width < 1 || box.height < 1) {
+		box.width = 800;
+		box.height = 600;
+	}
+
+	box.x = (int)server->cursor->x - box.width / 2;
+	box.y = (int)server->cursor->y - box.height / 2;
+
+	toplevel->floating_geometry = box;
+	toplevel->has_floating_geometry = true;
+	toplevel->state = NIDE_TOPLEVEL_FLOATING;
+	toplevel->snap_suppressed = true;
+	toplevel->restore_floating_pending = true;
+
+	wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
+	toplevel_apply_box(toplevel, box, true);
+
+	server->grab_x = server->cursor->x -
+		toplevel->scene_tree->node.x;
+	server->grab_y = server->cursor->y -
+		toplevel->scene_tree->node.y;
+}
+
+static void toplevel_snap(struct nide_toplevel *toplevel,
+		enum nide_toplevel_state side) {
+	if (toplevel->state == NIDE_TOPLEVEL_FLOATING) {
+		toplevel_capture_floating(toplevel);
+	}
+
+	toplevel->state = side;
+	toplevel->snap_anchor_x = toplevel->server->cursor->x;
+	toplevel->snap_suppressed = false;
+	toplevel_apply_snap(toplevel);
+
+	wlr_log(WLR_DEBUG, "snapped window to %s half",
+		side == NIDE_TOPLEVEL_SNAPPED_LEFT ? "left" : "right");
+}
+
+static void toplevel_reapply_state(struct nide_toplevel *toplevel) {
+	switch (toplevel->state) {
+	case NIDE_TOPLEVEL_SNAPPED_LEFT:
+	case NIDE_TOPLEVEL_SNAPPED_RIGHT:
+		toplevel_apply_snap(toplevel);
+		break;
+	case NIDE_TOPLEVEL_MAXIMIZED:
+		toplevel_apply_maximized(toplevel);
+		break;
+	case NIDE_TOPLEVEL_FULLSCREEN:
+		toplevel_apply_fullscreen(toplevel,
+			toplevel->xdg_toplevel->requested.fullscreen_output);
+		break;
+	case NIDE_TOPLEVEL_FLOATING:
+		break;
+	}
+}
+
+static void toplevel_sync_state_geometry(struct nide_toplevel *toplevel) {
+	switch (toplevel->state) {
+	case NIDE_TOPLEVEL_FLOATING:
+		if (toplevel->restore_floating_pending) {
+			struct wlr_box *geo =
+				&toplevel->xdg_toplevel->base->geometry;
+			struct wlr_box box = toplevel->floating_geometry;
+			wlr_scene_node_set_position(&toplevel->scene_tree->node,
+				box.x - geo->x, box.y - geo->y);
+			toplevel->restore_floating_pending = false;
+		}
+		break;
+	case NIDE_TOPLEVEL_SNAPPED_LEFT:
+	case NIDE_TOPLEVEL_SNAPPED_RIGHT:
+		toplevel_apply_box(toplevel, toplevel_snap_box(toplevel), false);
+		break;
+	case NIDE_TOPLEVEL_MAXIMIZED:
+		toplevel_apply_box(toplevel,
+			inset_box(toplevel_output_box(toplevel, NULL),
+				toplevel->server->config.maximize_margin),
+			false);
+		break;
+	case NIDE_TOPLEVEL_FULLSCREEN:
+		toplevel_apply_box(toplevel,
+			toplevel_output_box(toplevel,
+				toplevel->xdg_toplevel->requested.fullscreen_output),
+			false);
+		break;
+	}
+}
+
 static void place_toplevel(struct nide_toplevel *toplevel) {
 	struct nide_server *server = toplevel->server;
 	struct wlr_output *output = wlr_output_layout_output_at(
@@ -734,7 +1206,10 @@ static void place_toplevel(struct nide_toplevel *toplevel) {
 		y = max_y;
 	}
 
-	wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
+	wlr_scene_node_set_position(&toplevel->scene_tree->node,
+		x - geo->x, y - geo->y);
+	toplevel->placed = true;
+	toplevel_capture_floating(toplevel);
 	wlr_log(WLR_DEBUG, "window placement: %dx%d+%d+%d (geometry %dx%d+%d+%d)",
 		width, height, x, y, geo->width, geo->height, geo->x, geo->y);
 }
@@ -747,9 +1222,27 @@ static void begin_interactive(struct nide_toplevel *toplevel,
 	server->cursor_mode = mode;
 
 	if (mode == NIDE_CURSOR_MOVE) {
+		if (toplevel->state == NIDE_TOPLEVEL_MAXIMIZED ||
+				toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
+			toplevel_to_floating(toplevel, false);
+			toplevel->snap_suppressed = false;
+		} else if (toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT ||
+				toplevel->state == NIDE_TOPLEVEL_SNAPPED_RIGHT) {
+			toplevel->snap_anchor_x = server->cursor->x;
+		} else {
+			toplevel->snap_suppressed = false;
+		}
+
 		server->grab_x = server->cursor->x - toplevel->scene_tree->node.x;
 		server->grab_y = server->cursor->y - toplevel->scene_tree->node.y;
 	} else {
+		if (toplevel->state == NIDE_TOPLEVEL_MAXIMIZED ||
+				toplevel->state == NIDE_TOPLEVEL_FULLSCREEN ||
+				toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT ||
+				toplevel->state == NIDE_TOPLEVEL_SNAPPED_RIGHT) {
+			toplevel_to_floating(toplevel, true);
+		}
+
 		struct wlr_box *geo_box = &toplevel->xdg_toplevel->base->geometry;
 
 		double border_x = (toplevel->scene_tree->node.x + geo_box->x) +
@@ -768,9 +1261,64 @@ static void begin_interactive(struct nide_toplevel *toplevel,
 
 static void process_cursor_move(struct nide_server *server) {
 	struct nide_toplevel *toplevel = server->grabbed_toplevel;
-	wlr_scene_node_set_position(&toplevel->scene_tree->node,
-		server->cursor->x - server->grab_x,
-		server->cursor->y - server->grab_y);
+
+	if (toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT ||
+			toplevel->state == NIDE_TOPLEVEL_SNAPPED_RIGHT) {
+		bool left = toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT;
+		double delta_x = server->cursor->x - toplevel->snap_anchor_x;
+		double toward_edge = left ? -delta_x : delta_x;
+		double away_from_edge = left ? delta_x : -delta_x;
+
+		if (toward_edge < NIDE_SNAP_BREAKOUT &&
+				away_from_edge < NIDE_SNAP_BREAKOUT) {
+			return;
+		}
+		toplevel_break_snap(toplevel);
+	}
+
+	struct wlr_box *geo = &toplevel->xdg_toplevel->base->geometry;
+	int node_x = (int)(server->cursor->x - server->grab_x);
+	int node_y = (int)(server->cursor->y - server->grab_y);
+	struct wlr_box window = {
+		.x = node_x + geo->x,
+		.y = node_y + geo->y,
+		.width = geo->width > 0 ? geo->width : 800,
+		.height = geo->height > 0 ? geo->height : 600,
+	};
+
+	if (!toplevel->snap_suppressed &&
+			toplevel->state == NIDE_TOPLEVEL_FLOATING) {
+		struct wlr_output *output = wlr_output_layout_output_at(
+			server->output_layout, server->cursor->x,
+			server->cursor->y);
+		struct wlr_box box = {0};
+		if (output != NULL) {
+			wlr_output_layout_get_box(server->output_layout,
+				output, &box);
+		}
+		if (box.width > 0 && box.height > 0) {
+			if (window.x <= box.x + NIDE_SNAP_THRESHOLD &&
+					window.x + window.width >
+						box.x + NIDE_SNAP_THRESHOLD) {
+				toplevel_snap(toplevel,
+					NIDE_TOPLEVEL_SNAPPED_LEFT);
+				return;
+			}
+			if (window.x + window.width >=
+					box.x + box.width - NIDE_SNAP_THRESHOLD &&
+					window.x <
+						box.x + box.width - NIDE_SNAP_THRESHOLD) {
+				toplevel_snap(toplevel,
+					NIDE_TOPLEVEL_SNAPPED_RIGHT);
+				return;
+			}
+		}
+	}
+
+	wlr_scene_node_set_position(&toplevel->scene_tree->node, node_x, node_y);
+	if (toplevel->state == NIDE_TOPLEVEL_FLOATING) {
+		toplevel_capture_floating(toplevel);
+	}
 }
 
 static void process_cursor_resize(struct nide_server *server) {
@@ -811,6 +1359,15 @@ static void process_cursor_resize(struct nide_server *server) {
 		new_left - geo_box->x, new_top - geo_box->y);
 	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
 		new_right - new_left, new_bottom - new_top);
+
+	toplevel->floating_geometry = (struct wlr_box) {
+		.x = new_left,
+		.y = new_top,
+		.width = new_right - new_left,
+		.height = new_bottom - new_top,
+	};
+	toplevel->has_floating_geometry = true;
+	toplevel->restore_floating_pending = false;
 }
 
 static void process_cursor_motion(struct nide_server *server, uint32_t time) {
@@ -865,6 +1422,16 @@ static void run_bind(struct nide_server *server, struct nide_bind *bind) {
 				server->focused->xdg_toplevel->title != NULL
 					? server->focused->xdg_toplevel->title : "(untitled)");
 			wlr_xdg_toplevel_send_close(server->focused->xdg_toplevel);
+		}
+		break;
+	case NIDE_ACTION_MAXIMIZE:
+		if (server->focused != NULL) {
+			toplevel_toggle_maximized(server->focused);
+		}
+		break;
+	case NIDE_ACTION_FULLSCREEN:
+		if (server->focused != NULL) {
+			toplevel_toggle_fullscreen(server->focused);
 		}
 		break;
 	case NIDE_ACTION_QUIT:
@@ -1174,6 +1741,18 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	free(output);
 }
 
+static void output_layout_change(struct wl_listener *listener, void *data) {
+	struct nide_server *server =
+		wl_container_of(listener, server, output_layout_change);
+	struct nide_toplevel *toplevel;
+
+	wl_list_for_each(toplevel, &server->toplevels, link) {
+		if (toplevel->state != NIDE_TOPLEVEL_FLOATING) {
+			toplevel_reapply_state(toplevel);
+		}
+	}
+}
+
 static void server_new_output(struct wl_listener *listener, void *data) {
 	struct nide_server *server =
 		wl_container_of(listener, server, new_output);
@@ -1229,7 +1808,24 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 
 	toplevel->mapped = true;
 	wl_list_insert(&server->toplevels, &toplevel->link);
-	place_toplevel(toplevel);
+
+	if (!toplevel->placed) {
+		place_toplevel(toplevel);
+	}
+
+	if (toplevel->pending_fullscreen) {
+		toplevel->pending_fullscreen = false;
+		toplevel->pending_maximize = false;
+		toplevel_enter_fullscreen(toplevel);
+	} else if (toplevel->pending_maximize) {
+		toplevel->pending_maximize = false;
+		toplevel_enter_maximized(toplevel);
+	} else if (toplevel->state != NIDE_TOPLEVEL_FLOATING) {
+		toplevel_reapply_state(toplevel);
+	} else {
+		toplevel_apply_floating(toplevel);
+	}
+
 	focus_toplevel(toplevel);
 	decoration_apply(toplevel);
 }
@@ -1261,7 +1857,10 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 
 	if (toplevel->xdg_toplevel->base->initial_commit) {
 		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+		return;
 	}
+
+	toplevel_sync_state_geometry(toplevel);
 }
 
 static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
@@ -1316,8 +1915,35 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener,
 		void *data) {
 	struct nide_toplevel *toplevel =
 		wl_container_of(listener, toplevel, request_maximize);
-	if (toplevel->xdg_toplevel->base->initialized) {
-		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	bool maximized = toplevel->xdg_toplevel->requested.maximized;
+
+	if (!toplevel->xdg_toplevel->base->initialized) {
+		toplevel->pending_maximize = maximized;
+		return;
+	}
+
+	if (toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
+		/*
+		 * Fullscreen takes priority. Acknowledge the request without
+		 * changing the layout, so the client never waits for a
+		 * configure that never arrives.
+		 */
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+		return;
+	}
+
+	if (maximized) {
+		if (toplevel->state != NIDE_TOPLEVEL_MAXIMIZED) {
+			toplevel_enter_maximized(toplevel);
+		} else {
+			wlr_xdg_toplevel_set_maximized(
+				toplevel->xdg_toplevel, true);
+		}
+	} else if (toplevel->state == NIDE_TOPLEVEL_MAXIMIZED) {
+		toplevel_leave_maximized(toplevel);
+	} else {
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
 	}
 }
 
@@ -1325,8 +1951,24 @@ static void xdg_toplevel_request_fullscreen(struct wl_listener *listener,
 		void *data) {
 	struct nide_toplevel *toplevel =
 		wl_container_of(listener, toplevel, request_fullscreen);
-	if (toplevel->xdg_toplevel->base->initialized) {
-		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	bool fullscreen = toplevel->xdg_toplevel->requested.fullscreen;
+
+	if (!toplevel->xdg_toplevel->base->initialized) {
+		toplevel->pending_fullscreen = fullscreen;
+		return;
+	}
+
+	if (fullscreen) {
+		if (toplevel->state != NIDE_TOPLEVEL_FULLSCREEN) {
+			toplevel_enter_fullscreen(toplevel);
+		} else {
+			wlr_xdg_toplevel_set_fullscreen(
+				toplevel->xdg_toplevel, true);
+		}
+	} else if (toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
+		toplevel_leave_fullscreen(toplevel);
+	} else {
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
 	}
 }
 
@@ -1494,6 +2136,8 @@ static void print_bindings(const struct nide_config *cfg) {
 		switch (bind->action) {
 		case NIDE_ACTION_SPAWN: action = "spawn"; break;
 		case NIDE_ACTION_CLOSE: action = "close"; break;
+		case NIDE_ACTION_MAXIMIZE: action = "maximize"; break;
+		case NIDE_ACTION_FULLSCREEN: action = "fullscreen"; break;
 		case NIDE_ACTION_QUIT: action = "quit"; break;
 		}
 		if (bind->action == NIDE_ACTION_SPAWN) {
@@ -1589,6 +2233,7 @@ int main(int argc, char *argv[]) {
 
 	if (check_only) {
 		printf("Config: %s\n", have_config ? config_path : "(default)");
+		printf("Maximize margin: %d\n", config.maximize_margin);
 		print_bindings(&config);
 		return 0;
 	}
@@ -1644,6 +2289,9 @@ int main(int argc, char *argv[]) {
 
 	server.output_layout = wlr_output_layout_create(server.display);
 	wlr_xdg_output_manager_v1_create(server.display, server.output_layout);
+	server.output_layout_change.notify = output_layout_change;
+	wl_signal_add(&server.output_layout->events.change,
+		&server.output_layout_change);
 
 	server.new_output.notify = server_new_output;
 	wl_signal_add(&server.backend->events.new_output, &server.new_output);
@@ -1748,6 +2396,7 @@ int main(int argc, char *argv[]) {
 	wl_list_remove(&server.new_xdg_popup.link);
 	wl_list_remove(&server.new_decoration.link);
 	wl_list_remove(&server.new_output.link);
+	wl_list_remove(&server.output_layout_change.link);
 
 	wl_list_remove(&server.cursor_motion.link);
 	wl_list_remove(&server.cursor_motion_absolute.link);

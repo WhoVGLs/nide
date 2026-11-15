@@ -1,8 +1,8 @@
 # NIDE — Complete Guide
 
-**Version:** 0.2.0 "Jendela"
+**Version:** 0.3.0
 
-**Document:** November 14, 2026
+**Document:** November 15, 2026
 
 This document explains how to build, run, use, and configure NIDE. It is
 written for beginners; you do not need to understand C or Wayland to use NIDE
@@ -194,8 +194,8 @@ Notes:
   XWayland.
 - If ":5 is already active", use :6, :7, etc.
 - After the Xephyr window appears, CLICK inside it first.
-- Super+W, Super+C, and Super+Shift+Q only work after the Xephyr window has
-  focus.
+- NIDE keybindings (Super+W, Super+C, Super+M, Super+S, and Super+Shift+Q)
+  only work after the Xephyr window has focus.
 
 If the Super key does not reach NIDE, a KDE global shortcut may be grabbing
 it first (for example, Super+W for Overview). For nested testing, temporarily
@@ -240,6 +240,20 @@ Release the mouse button to finish.
 **Resizing** — Hold Super, right-click the window, and drag. The size changes
 from the bottom-right corner. Release the mouse button to finish.
 
+**Snapping** — Drag a window with Super+left-click until its left or right
+side touches the matching screen edge. The window snaps into that half of the
+output. Keep pushing toward the same edge, or drag away from it, to break the
+snap and return the window to floating mode.
+
+**Maximizing** — Super+M. The window fills the output but keeps a small margin
+around it, so it is not the same as fullscreen. Press Super+M again to restore
+the previous floating size and position.
+
+**Fullscreen** — Super+S toggles fullscreen, which fills the entire output
+without a margin. Applications can also request fullscreen themselves, for
+example F11 in a browser or game. Press the application's shortcut again to
+leave it.
+
 **Closing windows** — Super+C. This sends a proper close request to the
 application, not a forced kill. Applications with a "save file?" dialog can
 show it.
@@ -251,8 +265,8 @@ connection and close. Save your work first.
 selection) is also supported.
 
 **What is not available** — No close/minimize/maximize buttons, no Alt+Tab, no
-bar/panel, and no workspaces. Focus changes by clicking or when a new window
-opens.
+bar/panel, and no workspaces. Use Super+C to close, Super+M to maximize, and
+Super+S for fullscreen. Focus changes by clicking or when a new window opens.
 
 ## 6. Configuration
 
@@ -301,13 +315,15 @@ If NO config file is found, NIDE uses the default bindings:
 ```lua
 nide.bind("super+w", "spawn", "foot")
 nide.bind("super+c", "close")
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
 nide.bind("super+shift+q", "quit")
 ```
 
 IMPORTANT: the default bindings are used only when no config file exists at
 all. If a config file is found, its contents are used as-is; the default
 bindings are NOT added automatically. So if the config only contains Super+W,
-then Super+C and Super+Shift+Q do not exist.
+then Super+C, Super+M, Super+S, and Super+Shift+Q do not exist.
 
 Always include at least one quit binding, for example:
 
@@ -335,12 +351,15 @@ Examples:
 ```lua
 nide.bind("super+w", "spawn", "foot")
 nide.bind("super+c", "close")
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
 nide.bind("super+shift+q", "quit")
 ```
 
 Rules:
 
-- Three arguments for the spawn action; two arguments for close and quit.
+- Two arguments for actions without an argument (close, maximize,
+  fullscreen, quit); three arguments for spawn.
 - The combination and action name are written as strings (use quotes).
 - The last part of the combination is the key name. The preceding parts are
   modifiers.
@@ -426,12 +445,22 @@ is what you write in the config.
 **close** — Asks the focused application to close its window. No argument
 needed. If no window is focused, nothing happens.
 
+**maximize** — Maximizes the focused window while keeping a margin around it.
+No argument needed. The margin is set by `nide.maximize_margin` (default 8
+pixels) and also applies to snapped windows. Pressing the binding again
+restores the previous floating size and position.
+
+**fullscreen** — Toggles fullscreen for the focused window. No argument needed.
+Fullscreen fills the entire output without a margin. Pressing the binding
+again returns the window to its previous state (floating, maximized, or
+snapped). Application-initiated fullscreen, such as F11 in a browser or game,
+works the same way.
+
 **quit** — Quits the compositor. No argument needed. All Wayland applications
 are disconnected and closed. Save your work first.
 
-There are no other actions. Keybindings for moving windows, tiling,
-workspaces, or maximizing are not available; windows are moved with the mouse
-(Super+click).
+There are no other actions. Windows are moved and resized with the mouse
+(Super+click). Tiling and workspaces are not available.
 
 ### 6.7 Complete config example
 
@@ -453,6 +482,13 @@ nide.bind("super+d", "spawn", launcher)
 -- Close the focused window.
 nide.bind("super+c", "close")
 
+-- Maximize and fullscreen.
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
+
+-- Gap around maximized and snapped windows, in pixels.
+nide.maximize_margin = 8
+
 -- Quit the compositor.
 nide.bind("super+shift+q", "quit")
 
@@ -470,6 +506,9 @@ nide.bind("super+b", "spawn", "firefox")
 nide.bind("super+f", "spawn", "nautilus")
 nide.bind("super+t", "spawn", terminal .. " --title=new-terminal")
 nide.bind("super+c", "close")
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
+nide.maximize_margin = 12
 nide.bind("super+shift+q", "quit")
 ```
 
@@ -535,9 +574,12 @@ Example of valid output:
 
 ```text
 Config: /home/user/.config/nide/config.lua
-Keybindings (3):
+Maximize margin: 8
+Keybindings (5):
   super+w              -> spawn foot
   super+c              -> close
+  super+m              -> maximize
+  super+s              -> fullscreen
   super+shift+q        -> quit
 ```
 
@@ -547,7 +589,9 @@ including the line number. Fix it and check again.
 Hot reload:
 
 NIDE watches the active config file. After the file is saved, new bindings
-take effect immediately without a restart. Open windows are not affected.
+take effect immediately without a restart. Open windows keep running, and a
+changed `nide.maximize_margin` is applied to open maximized and snapped
+windows.
 
 If a config file exists, startup logs show the watched path:
 
@@ -622,6 +666,7 @@ windows.
 Consequences:
 
 - No close button on windows. Use Super+C.
+- No maximize or fullscreen button. Use Super+M and Super+S.
 - No title bar to drag. Use Super+left-click.
 - No resize handle. Use Super+right-click (bottom-right corner).
 
@@ -633,8 +678,18 @@ screen edge.
 **Focus** — New windows are focused immediately. Click another window to
 switch. Clicking an empty area releases keyboard focus.
 
-**Maximize/fullscreen** — Maximize and fullscreen requests from applications
-are not applied. Windows stay floating.
+**Maximize and fullscreen** — Super+M maximizes the focused window with a
+margin from `nide.maximize_margin` (default 8 pixels). Saving a changed margin
+applies it to open maximized and snapped windows. Super+S toggles true
+fullscreen, which fills the output without a margin. Applications can also
+request maximize or fullscreen; NIDE honors those requests, so F11 fullscreen
+in browsers and games works. Maximize, fullscreen, and snapping remember the
+previous floating geometry and restore it when the window returns to floating.
+
+**Snapping** — Drag a floating window to the left or right edge of the output.
+When the side of the window touches the edge, it snaps into that half of the
+screen. Keep pushing toward the same edge, or drag away from it, to break the
+snap. The margin setting applies to the outer edges of snapped windows.
 
 **Multi-monitor** — Outputs are detected automatically and arranged by
 wlroots. There is no manual monitor position configuration yet. New windows
@@ -669,7 +724,7 @@ Examples:
 `--version` prints the NIDE version, for example:
 
 ```text
-nide 0.2.0
+nide 0.3.0
 ```
 
 Relevant environment variables:
@@ -703,14 +758,15 @@ available:
 - XWayland. X11 applications cannot run.
 - layer-shell. Bars/panels such as Waybar and layer-shell-based notifications
   are not supported.
-- Maximize, fullscreen, minimize, animations, shadows, and decorations.
+- Minimize, animations, shadows, and decorations.
 - Alt+Tab / window switcher and workspaces.
-- Tiling, snap, or layout management.
+- Tiling or automatic layout management; only left/right edge snapping is
+  available.
 - Manual multi-monitor position/scale configuration.
 - Input method (IME) for languages that require composition.
 - Idle management, screen lock, and automatic DPMS.
 - Touch, tablet, and gestures.
-- Color, gap, border, or cursor theme configuration.
+- Color, border, or cursor theme configuration.
 
 If you need these features, NIDE can serve as a foundation for development,
 but they are not available yet.
@@ -879,13 +935,15 @@ Default bindings (only when no config file exists):
 ```text
 Super+W          open foot
 Super+C          close focused window
+Super+M          maximize with margin
+Super+S          toggle fullscreen
 Super+Shift+Q    quit NIDE
 ```
 
 Mouse:
 
 ```text
-Super+left-click   move window
+Super+left-click   move window; drag to a side edge to snap
 Super+right-click  resize from bottom-right corner
 ```
 
@@ -896,6 +954,9 @@ local terminal = "foot"
 
 nide.bind("super+w", "spawn", terminal)
 nide.bind("super+c", "close")
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
+nide.maximize_margin = 8
 nide.bind("super+shift+q", "quit")
 ```
 

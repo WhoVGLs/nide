@@ -5,7 +5,7 @@ name, NIDE is a small, simple Wayland compositor built with
 [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 and configured
 entirely with Lua.
 
-Current release: **NIDE 0.2.0 "Jendela"**.
+Current version: **NIDE 0.3.0**.
 
 ## What is NIDE?
 
@@ -34,6 +34,10 @@ and the complete guide is in [`docs/manual.md`](docs/manual.md).
 - Lua keybinding configuration, read from `~/.config/nide/config.lua`.
 - Hot reload: saving the config file updates bindings without a restart.
 - `Super+W` opens a terminal, `Super+C` closes the focused window.
+- `Super+M` maximizes with a configurable margin; `Super+S` toggles fullscreen.
+- Edge snapping: drag a window to the left or right edge to fill half the
+  screen. Push further toward the edge to break the snap.
+- Application fullscreen requests work, including F11 in browsers and games.
 - `Super+left-click` moves a window, `Super+right-click` resizes it.
 - Clipboard and primary selection (middle-click paste) are supported.
 - One small binary, one C file, no toolkit dependency.
@@ -116,6 +120,8 @@ If no config file exists, NIDE uses the default bindings:
 ```lua
 nide.bind("super+w", "spawn", "foot")
 nide.bind("super+c", "close")
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
 nide.bind("super+shift+q", "quit")
 ```
 
@@ -126,7 +132,12 @@ local terminal = "foot"
 
 nide.bind("super+w", "spawn", terminal)
 nide.bind("super+c", "close")
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
 nide.bind("super+shift+q", "quit")
+
+-- Gap in pixels around maximized and snapped windows. Default: 8.
+nide.maximize_margin = 8
 ```
 
 Format:
@@ -145,7 +156,18 @@ Actions:
 |---|---|---|
 | `spawn` | shell command | runs a program |
 | `close` | — | closes the focused window |
+| `maximize` | — | maximizes with a configurable margin |
+| `fullscreen` | — | toggles fullscreen |
 | `quit` | — | quits the compositor |
+
+`nide.maximize_margin` sets the gap in pixels around maximized windows. It
+also applies to snapped windows. The default is `8`; fullscreen always fills
+the output without a margin. Saving a changed margin applies it to open
+maximized and snapped windows.
+
+```lua
+nide.maximize_margin = 12
+```
 
 `nide.log(...)` can be used to print messages from the config:
 
@@ -154,9 +176,11 @@ nide.log("NIDE ready")
 ```
 
 NIDE watches the active config file and reloads bindings automatically when
-the file is saved. Open windows are not affected. Configs with errors or no
-keybindings are ignored, and the previous config stays active. If NIDE starts
-without a config file (default mode), restart it once after creating a config.
+the file is saved. Open windows keep running, and a changed
+`nide.maximize_margin` is applied to open maximized and snapped windows.
+Configs with errors or no keybindings are ignored, and the previous config
+stays active. If NIDE starts without a config file (default mode), restart it
+once after creating a config.
 
 ## Decorations and window behavior
 
@@ -166,8 +190,14 @@ a title bar or border. The result is completely plain windows.
 
 Consequences:
 
-- There are no close/minimize/maximize buttons. Use `Super+C`.
+- There are no close/minimize/maximize buttons. Use `Super+C` to close,
+  `Super+M` to maximize, and `Super+S` to toggle fullscreen.
 - Move windows with `Super+left-click`, resize with `Super+right-click`.
+- Drag a window to the left or right screen edge to snap it into that half of
+  the output. Keep pushing toward the same edge to break the snap.
+- Maximize keeps a small margin; fullscreen fills the output.
+- Maximizing, snapping, or fullscreening a window remembers its previous
+  floating geometry and restores it when the window returns to floating.
 - New windows are centered with a small cascade.
 - Focus changes when a window is clicked or a new window opens.
 
@@ -176,7 +206,7 @@ Consequences:
 - Wayland-native applications only. XWayland is not enabled, so X11
   applications cannot run.
 - No layer-shell, so Wayland bars/panels (Waybar, etc.) are not supported.
-- No maximize, fullscreen, minimize, or animations.
+- No minimize, animations, shadows, or decorations.
 - No input method (IME) support.
 - Single output configuration; no manual multi-monitor positioning.
 
@@ -200,7 +230,8 @@ NIDE uses [Semantic Versioning](https://semver.org/) with the
 - `PATCH` increases for backward-compatible bug fixes.
 
 While the version is still `0.x`, the config API is considered unstable.
-Changes that break existing configs increase `MINOR`, for example `0.2.0` to
-`0.3.0`, and are documented in [`CHANGELOG.md`](CHANGELOG.md).
+New features and changes that break existing configs increase `MINOR`; bug
+fixes increase `PATCH`. Every release is documented in
+[`CHANGELOG.md`](CHANGELOG.md).
 
-Current version: **0.2.0**.
+Current version: **0.3.0**.

@@ -5,6 +5,28 @@ All notable changes to NIDE are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-11-15
+
+### Added
+
+- Edge snapping: dragging a window to the left or right edge snaps it to that
+  half of the output. Pushing further toward the edge breaks the snap and
+  returns the window to floating mode.
+- `maximize` action with a configurable margin around the window. The default
+  is 8 pixels and is set with `nide.maximize_margin` in the Lua config.
+- `fullscreen` action, bound to `Super+S` by default.
+- `Super+M` is now the default maximize binding.
+- Maximize, fullscreen, and snap states remember the previous floating
+  geometry and restore it when the window returns to floating.
+- Application-initiated maximize and fullscreen requests are supported,
+  including F11 fullscreen in browsers and games.
+
+### Fixed
+
+- Application fullscreen requests could freeze because the compositor
+  scheduled a configure without setting the fullscreen state or output size.
+  NIDE now applies the requested state and size before configuring the client.
+
 ## [0.2.0] "Jendela" - 2026-11-14
 
 First release under the NIDE name. The project was previously called wlua.

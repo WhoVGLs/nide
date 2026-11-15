@@ -5,7 +5,11 @@
 --   nide.bind("modifier+key", "action", "argument")
 --
 -- Modifiers: shift, ctrl, alt, super (can be combined with +).
--- Actions  : spawn (run a command), close (close the focused window), quit.
+-- Actions  : spawn (run a command), close, maximize, fullscreen, quit.
+--
+-- nide.maximize_margin sets the gap in pixels around maximized and snapped
+-- windows. Fullscreen always fills the output. Default: 8.
+nide.maximize_margin = 8
 
 -- Replace with your favorite Wayland terminal: foot, kitty, alacritty, etc.
 local terminal = "dolphin"
@@ -19,6 +23,10 @@ nide.bind("super+f", "spawn", file)
 
 -- Super+C closes the focused application/window.
 nide.bind("super+c", "close")
+
+-- Super+M maximizes; Super+S toggles fullscreen.
+nide.bind("super+m", "maximize")
+nide.bind("super+s", "fullscreen")
 
 -- Optional: quit the compositor.
 nide.bind("super+shift+q", "quit")
