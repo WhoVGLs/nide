@@ -5,6 +5,15 @@ All notable changes to NIDE are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-11-15
+
+### Changed
+
+- Snap previews now trigger when the pointer reaches the left, right, or top
+  edge of the output, instead of when the dragged window edge reaches it.
+  Large windows no longer need to be pushed fully to the edge before a preview
+  appears.
+
 ## [0.3.1] - 2026-11-15
 
 ### Changed

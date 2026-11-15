@@ -54,7 +54,7 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 
-#define NIDE_VERSION "0.3.1"
+#define NIDE_VERSION "0.3.2"
 #define MAX_BINDS 64
 #define NIDE_MAXIMIZE_MARGIN_DEFAULT 8
 #define NIDE_SNAP_THRESHOLD 24
@@ -1093,15 +1093,14 @@ static struct wlr_box drag_output_box(struct nide_server *server) {
 	return box;
 }
 
-static enum nide_snap_target drag_snap_target(struct nide_server *server,
-		struct wlr_box window) {
+static enum nide_snap_target drag_snap_target(struct nide_server *server) {
 	struct wlr_box box = drag_output_box(server);
 	int threshold = NIDE_SNAP_THRESHOLD;
-	int center = window.x + window.width / 2;
-	int box_center = box.x + box.width / 2;
-	int left_dist = window.x - box.x;
-	int right_dist = (box.x + box.width) - (window.x + window.width);
-	int top_dist = window.y - box.y;
+	double cursor_x = server->cursor->x;
+	double cursor_y = server->cursor->y;
+	int left_dist = (int)cursor_x - box.x;
+	int right_dist = (box.x + box.width) - (int)cursor_x;
+	int top_dist = (int)cursor_y - box.y;
 	int best = threshold + 1;
 	enum nide_snap_target target = NIDE_SNAP_TARGET_NONE;
 
@@ -1115,14 +1114,17 @@ static enum nide_snap_target drag_snap_target(struct nide_server *server,
 		top_dist = 0;
 	}
 
-	/* A tie favours the side edge, which is the more common gesture. */
-	if (left_dist <= threshold && center < box_center &&
-			left_dist <= best) {
+	/*
+	 * The pointer triggers the preview, not the window edge. This lets
+	 * the user snap a large window without pushing its whole width to
+	 * the screen edge. A tie favours the side edge, which is the more
+	 * common gesture.
+	 */
+	if (left_dist <= threshold && left_dist <= best) {
 		target = NIDE_SNAP_TARGET_LEFT;
 		best = left_dist;
 	}
-	if (right_dist <= threshold && center > box_center &&
-			right_dist < best) {
+	if (right_dist <= threshold && right_dist < best) {
 		target = NIDE_SNAP_TARGET_RIGHT;
 		best = right_dist;
 	}
@@ -1147,13 +1149,6 @@ static struct wlr_box drag_preview_box(struct nide_server *server,
 
 static void drag_preview_update(struct nide_server *server,
 		struct nide_toplevel *toplevel) {
-	struct wlr_box *geo = &toplevel->xdg_toplevel->base->geometry;
-	struct wlr_box window = {
-		.x = (int)toplevel->scene_tree->node.x + geo->x,
-		.y = (int)toplevel->scene_tree->node.y + geo->y,
-		.width = geo->width > 0 ? geo->width : 800,
-		.height = geo->height > 0 ? geo->height : 600,
-	};
 	enum nide_snap_target target;
 
 	if (!server->move_started ||
@@ -1165,20 +1160,21 @@ static void drag_preview_update(struct nide_server *server,
 	if (server->drag_suppressed == NIDE_SNAP_TARGET_LEFT ||
 			server->drag_suppressed == NIDE_SNAP_TARGET_RIGHT) {
 		struct wlr_box output = drag_output_box(server);
+		int cursor_x = (int)server->cursor->x;
 		bool cleared;
 
 		if (server->drag_suppressed == NIDE_SNAP_TARGET_LEFT) {
-			cleared = window.x - output.x > NIDE_SNAP_THRESHOLD;
+			cleared = cursor_x - output.x > NIDE_SNAP_THRESHOLD;
 		} else {
-			cleared = output.x + output.width -
-				(window.x + window.width) > NIDE_SNAP_THRESHOLD;
+			cleared = output.x + output.width - cursor_x >
+				NIDE_SNAP_THRESHOLD;
 		}
 		if (cleared) {
 			server->drag_suppressed = NIDE_SNAP_TARGET_NONE;
 		}
 	}
 
-	target = drag_snap_target(server, window);
+	target = drag_snap_target(server);
 	if (target == server->drag_suppressed) {
 		target = NIDE_SNAP_TARGET_NONE;
 	}

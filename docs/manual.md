@@ -1,6 +1,6 @@
 # NIDE — Complete Guide
 
-**Version:** 0.3.1
+**Version:** 0.3.2
 
 **Document:** November 15, 2026
 
@@ -240,11 +240,13 @@ Release the mouse button to finish.
 **Resizing** — Hold Super, right-click the window, and drag. The size changes
 from the bottom-right corner. Release the mouse button to finish.
 
-**Snapping** — Drag a window with Super+left-click until its left or right
-side touches the matching screen edge. A preview shows the half of the screen
-the window will occupy, but the window itself does not change size until you
-release the mouse button. Drag to the top edge instead to preview fullscreen.
-Release to apply the preview, or move away from the edge to cancel it.
+**Snapping** — Hold Super, left-click a window, and drag the pointer to the
+left or right edge of the screen. A preview shows the half of the screen the
+window will occupy, but the window itself does not change size until you
+release the mouse button. Drag the pointer to the top edge instead to preview
+fullscreen. Release to apply the preview, or move the pointer away from the
+edge to cancel it. The pointer triggers the preview, so you do not have to push
+the entire window to the edge.
 
 Once a window is snapped, it resists accidental detaching. Pushing toward the
 snapped edge never releases it. Pull inward or vertically at least 64 pixels
@@ -693,11 +695,13 @@ request maximize or fullscreen; NIDE honors those requests, so F11 fullscreen
 in browsers and games works. Maximize, fullscreen, and snapping remember the
 previous floating geometry and restore it when the window returns to floating.
 
-**Snapping** — Drag a floating window to the left or right edge of the output.
-A translucent preview shows the half-screen target while the window is still
-floating. Drag to the top edge to preview fullscreen instead. The preview uses
-`nide.maximize_margin` for side targets; fullscreen has no margin. The window
-is resized only when you release the mouse button.
+**Snapping** — While moving a floating window, drag the pointer to the left or
+right edge of the output. A translucent preview shows the half-screen target
+while the window is still floating. Drag the pointer to the top edge to preview
+fullscreen instead. The preview uses `nide.maximize_margin` for side targets;
+fullscreen has no margin. The window is resized only when you release the mouse
+button. The preview follows the pointer rather than the window edge, so large
+windows are easy to snap.
 
 A snapped window stays attached when you push toward its edge. Pull inward or
 vertically at least 64 pixels to detach it. A pressure gauge on the snapped
@@ -737,7 +741,7 @@ Examples:
 `--version` prints the NIDE version, for example:
 
 ```text
-nide 0.3.1
+nide 0.3.2
 ```
 
 Relevant environment variables:
@@ -956,8 +960,8 @@ Super+Shift+Q    quit NIDE
 Mouse:
 
 ```text
-Super+left-click   move window; drag to a side edge for a half-screen preview,
-                   or to the top edge for a fullscreen preview
+Super+left-click   move window; drag the pointer to a side edge for a
+                   half-screen preview, or to the top edge for fullscreen
 Super+right-click  resize from bottom-right corner
 ```
 
