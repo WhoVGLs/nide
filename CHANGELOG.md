@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Large windows no longer need to be pushed fully to the edge before a preview
   appears.
 
+### Performance
+
+- Pointer motion during a drag now performs a single output lookup per update
+  and skips scene-graph changes when the snap preview or pressure gauge has not
+  changed.
+- Saved floating geometry is clamped only when a restore point is captured,
+  instead of on every drag update.
+
 ## [0.3.1] - 2026-11-15
 
 ### Changed
