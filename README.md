@@ -5,7 +5,7 @@ name, NIDE is a small, simple Wayland compositor built with
 [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 and configured
 entirely with Lua.
 
-Current version: **NIDE 0.3.0**.
+Current version: **NIDE 0.3.1**.
 
 ## What is NIDE?
 
@@ -35,8 +35,12 @@ and the complete guide is in [`docs/manual.md`](docs/manual.md).
 - Hot reload: saving the config file updates bindings without a restart.
 - `Super+W` opens a terminal, `Super+C` closes the focused window.
 - `Super+M` maximizes with a configurable margin; `Super+S` toggles fullscreen.
-- Edge snapping: drag a window to the left or right edge to fill half the
-  screen. Push further toward the edge to break the snap.
+- Edge snapping with a live preview: drag a window to the left or right edge
+  to preview that half of the screen, or to the top edge to preview fullscreen.
+  The window changes only when the mouse button is released.
+- Snapped windows resist detaching: drag inward or vertically at least 64
+  pixels to break the snap. A pressure gauge shows the progress, and pushing
+  toward the snapped edge never detaches the window.
 - Application fullscreen requests work, including F11 in browsers and games.
 - `Super+left-click` moves a window, `Super+right-click` resizes it.
 - Clipboard and primary selection (middle-click paste) are supported.
@@ -193,8 +197,9 @@ Consequences:
 - There are no close/minimize/maximize buttons. Use `Super+C` to close,
   `Super+M` to maximize, and `Super+S` to toggle fullscreen.
 - Move windows with `Super+left-click`, resize with `Super+right-click`.
-- Drag a window to the left or right screen edge to snap it into that half of
-  the output. Keep pushing toward the same edge to break the snap.
+- Drag a window to the left or right screen edge to preview and snap it into
+  that half of the output. Drag to the top edge to preview fullscreen. A
+  snapped window resists detaching until you pull it 64 pixels away.
 - Maximize keeps a small margin; fullscreen fills the output.
 - Maximizing, snapping, or fullscreening a window remembers its previous
   floating geometry and restores it when the window returns to floating.
@@ -234,4 +239,4 @@ New features and changes that break existing configs increase `MINOR`; bug
 fixes increase `PATCH`. Every release is documented in
 [`CHANGELOG.md`](CHANGELOG.md).
 
-Current version: **0.3.0**.
+Current version: **0.3.1**.

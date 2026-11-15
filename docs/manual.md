@@ -1,6 +1,6 @@
 # NIDE — Complete Guide
 
-**Version:** 0.3.0
+**Version:** 0.3.1
 
 **Document:** November 15, 2026
 
@@ -241,9 +241,16 @@ Release the mouse button to finish.
 from the bottom-right corner. Release the mouse button to finish.
 
 **Snapping** — Drag a window with Super+left-click until its left or right
-side touches the matching screen edge. The window snaps into that half of the
-output. Keep pushing toward the same edge, or drag away from it, to break the
-snap and return the window to floating mode.
+side touches the matching screen edge. A preview shows the half of the screen
+the window will occupy, but the window itself does not change size until you
+release the mouse button. Drag to the top edge instead to preview fullscreen.
+Release to apply the preview, or move away from the edge to cancel it.
+
+Once a window is snapped, it resists accidental detaching. Pushing toward the
+snapped edge never releases it. Pull inward or vertically at least 64 pixels
+to break the snap; a pressure gauge on the snapped edge shows how close you
+are to the threshold. The window returns to its previous floating size and
+stays fully on-screen.
 
 **Maximizing** — Super+M. The window fills the output but keeps a small margin
 around it, so it is not the same as fullscreen. Press Super+M again to restore
@@ -687,9 +694,15 @@ in browsers and games works. Maximize, fullscreen, and snapping remember the
 previous floating geometry and restore it when the window returns to floating.
 
 **Snapping** — Drag a floating window to the left or right edge of the output.
-When the side of the window touches the edge, it snaps into that half of the
-screen. Keep pushing toward the same edge, or drag away from it, to break the
-snap. The margin setting applies to the outer edges of snapped windows.
+A translucent preview shows the half-screen target while the window is still
+floating. Drag to the top edge to preview fullscreen instead. The preview uses
+`nide.maximize_margin` for side targets; fullscreen has no margin. The window
+is resized only when you release the mouse button.
+
+A snapped window stays attached when you push toward its edge. Pull inward or
+vertically at least 64 pixels to detach it. A pressure gauge on the snapped
+edge fills as you pull; when it is full, the window returns to floating mode.
+This prevents a snap from breaking on small pointer movements.
 
 **Multi-monitor** — Outputs are detected automatically and arranged by
 wlroots. There is no manual monitor position configuration yet. New windows
@@ -724,7 +737,7 @@ Examples:
 `--version` prints the NIDE version, for example:
 
 ```text
-nide 0.3.0
+nide 0.3.1
 ```
 
 Relevant environment variables:
@@ -760,8 +773,8 @@ available:
   are not supported.
 - Minimize, animations, shadows, and decorations.
 - Alt+Tab / window switcher and workspaces.
-- Tiling or automatic layout management; only left/right edge snapping is
-  available.
+- Tiling or automatic layout management; only edge snapping (left/right
+  halves and top fullscreen) is available.
 - Manual multi-monitor position/scale configuration.
 - Input method (IME) for languages that require composition.
 - Idle management, screen lock, and automatic DPMS.
@@ -943,7 +956,8 @@ Super+Shift+Q    quit NIDE
 Mouse:
 
 ```text
-Super+left-click   move window; drag to a side edge to snap
+Super+left-click   move window; drag to a side edge for a half-screen preview,
+                   or to the top edge for a fullscreen preview
 Super+right-click  resize from bottom-right corner
 ```
 

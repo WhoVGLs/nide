@@ -5,6 +5,26 @@ All notable changes to NIDE are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-11-15
+
+### Changed
+
+- Edge snapping now shows a live preview while dragging. The left and right
+  edges preview the matching half of the output, and the top edge previews
+  fullscreen. The window is resized only after the mouse button is released.
+- Snapped windows now resist detaching. Pushing toward the snapped edge never
+  detaches the window. Pulling inward or vertically requires 64 pixels of
+  travel, visualized by a pressure gauge on the snapped edge.
+- Saved floating geometry is kept on-screen, so leaving fullscreen or maximize
+  cannot restore a window outside the output.
+
+### Fixed
+
+- Snapped windows detached after almost any pointer movement because the old
+  16-pixel breakout threshold accepted movement toward the edge.
+- Releasing a window just after detaching could immediately snap it back to
+  the same edge.
+
 ## [0.3.0] - 2026-11-15
 
 ### Added

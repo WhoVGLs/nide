@@ -11,6 +11,7 @@
 #include <getopt.h>
 #include <limits.h>
 #include <linux/input-event-codes.h>
+#include <math.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -53,11 +54,12 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 
-#define NIDE_VERSION "0.3.0"
+#define NIDE_VERSION "0.3.1"
 #define MAX_BINDS 64
 #define NIDE_MAXIMIZE_MARGIN_DEFAULT 8
 #define NIDE_SNAP_THRESHOLD 24
-#define NIDE_SNAP_BREAKOUT 16
+#define NIDE_SNAP_RESISTANCE 64
+#define NIDE_PREVIEW_BORDER 3
 
 #define NIDE_MOD_MASK \
 	(WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO)
@@ -82,6 +84,13 @@ enum nide_toplevel_state {
 	NIDE_TOPLEVEL_SNAPPED_RIGHT,
 	NIDE_TOPLEVEL_MAXIMIZED,
 	NIDE_TOPLEVEL_FULLSCREEN,
+};
+
+enum nide_snap_target {
+	NIDE_SNAP_TARGET_NONE,
+	NIDE_SNAP_TARGET_LEFT,
+	NIDE_SNAP_TARGET_RIGHT,
+	NIDE_SNAP_TARGET_FULLSCREEN,
 };
 
 struct nide_bind {
@@ -144,6 +153,19 @@ struct nide_server {
 	double grab_x, grab_y;
 	struct wlr_box grab_geobox;
 	uint32_t resize_edges;
+	enum nide_snap_target drag_target;
+	enum nide_snap_target drag_suppressed;
+	double move_start_x, move_start_y;
+	bool move_started;
+
+	struct wlr_scene_tree *overlay_tree;
+	struct wlr_scene_tree *preview_tree;
+	struct wlr_scene_tree *snap_gauge_tree;
+	struct wlr_scene_rect *preview_fill;
+	struct wlr_scene_rect *preview_border[4];
+	struct wlr_scene_rect *snap_gauge_backdrop;
+	struct wlr_scene_rect *snap_gauge_track;
+	struct wlr_scene_rect *snap_gauge_fill;
 
 	struct nide_config config;
 	int cascade;
@@ -181,8 +203,10 @@ struct nide_toplevel {
 	struct wlr_box floating_geometry;
 	bool has_floating_geometry;
 	bool restore_floating_pending;
-	bool snap_suppressed;
 	double snap_anchor_x;
+	double snap_anchor_y;
+	double snap_grab_x;
+	double snap_grab_y;
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -220,6 +244,7 @@ struct nide_decoration {
 static void decoration_apply(struct nide_toplevel *toplevel);
 static void toplevel_capture_floating(struct nide_toplevel *toplevel);
 static void toplevel_reapply_state(struct nide_toplevel *toplevel);
+static void drag_overlay_hide(struct nide_server *server);
 
 /* ------------------------------------------------------------------------- */
 /* Lua configuration                                                         */
@@ -693,8 +718,11 @@ static void spawn_command(const char *cmd) {
 }
 
 static void reset_cursor_mode(struct nide_server *server) {
+	drag_overlay_hide(server);
 	server->cursor_mode = NIDE_CURSOR_PASSTHROUGH;
 	server->grabbed_toplevel = NULL;
+	server->move_started = false;
+	server->drag_suppressed = NIDE_SNAP_TARGET_NONE;
 }
 
 static struct nide_toplevel *desktop_toplevel_at(struct nide_server *server,
@@ -858,20 +886,52 @@ static void toplevel_capture_floating(struct nide_toplevel *toplevel) {
 		box.height = toplevel->floating_geometry.height;
 	}
 
+	/*
+	 * Keep the saved geometry reachable. Fullscreen and snap gestures can
+	 * end with the window partly outside the layout, but restoring that
+	 * position later would put the window off-screen.
+	 */
+	struct wlr_box layout = {0};
+	wlr_output_layout_get_box(toplevel->server->output_layout, NULL,
+		&layout);
+	if (layout.width > 0 && layout.height > 0) {
+		int margin = 8;
+		int min_x = layout.x + margin;
+		int min_y = layout.y + margin;
+		int max_x = layout.x + layout.width - box.width - margin;
+		int max_y = layout.y + layout.height - box.height - margin;
+
+		if (max_x < min_x) {
+			max_x = min_x;
+		}
+		if (max_y < min_y) {
+			max_y = min_y;
+		}
+		if (box.x < min_x) {
+			box.x = min_x;
+		} else if (box.x > max_x) {
+			box.x = max_x;
+		}
+		if (box.y < min_y) {
+			box.y = min_y;
+		} else if (box.y > max_y) {
+			box.y = max_y;
+		}
+	}
+
 	toplevel->floating_geometry = box;
 	toplevel->has_floating_geometry = true;
 }
 
-static struct wlr_box toplevel_snap_box(struct nide_toplevel *toplevel) {
-	struct wlr_box box = toplevel_output_box(toplevel, NULL);
-	int margin = toplevel->server->config.maximize_margin;
+static struct wlr_box snap_box_for_output(struct wlr_box box, int margin,
+		bool left) {
 	int x_margin = margin * 2 < box.width ? margin : 0;
 	int y_margin = margin * 2 < box.height ? margin : 0;
 	int half = box.width / 2;
 	int x;
 	int width;
 
-	if (toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT) {
+	if (left) {
 		x = box.x + x_margin;
 		width = half - x_margin;
 	} else {
@@ -889,6 +949,314 @@ static struct wlr_box toplevel_snap_box(struct nide_toplevel *toplevel) {
 		.width = width,
 		.height = box.height - y_margin * 2,
 	};
+}
+
+static struct wlr_box toplevel_snap_box(struct nide_toplevel *toplevel) {
+	struct wlr_box box = toplevel_output_box(toplevel, NULL);
+
+	return snap_box_for_output(box,
+		toplevel->server->config.maximize_margin,
+		toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT);
+}
+
+/*
+ * Overlay nodes for the snap preview and the snap pressure gauge. The
+ * overlay tree is raised above the windows only while it is visible.
+ */
+static const float preview_fill_color[4] = {
+	0.066f, 0.132f, 0.22f, 0.22f,
+};
+static const float preview_border_color[4] = {
+	0.399f, 0.684f, 0.95f, 0.95f,
+};
+static const float snap_gauge_backdrop_color[4] = {
+	0.0f, 0.0f, 0.0f, 0.45f,
+};
+static const float snap_gauge_track_color[4] = {
+	0.176f, 0.187f, 0.209f, 0.22f,
+};
+static const float snap_gauge_fill_color[4] = {
+	0.399f, 0.684f, 0.95f, 0.95f,
+};
+
+static void drag_overlay_init(struct nide_server *server) {
+	server->overlay_tree = wlr_scene_tree_create(&server->scene->tree);
+	server->preview_tree = wlr_scene_tree_create(server->overlay_tree);
+	server->snap_gauge_tree = wlr_scene_tree_create(server->overlay_tree);
+
+	server->preview_fill = wlr_scene_rect_create(server->preview_tree,
+		1, 1, preview_fill_color);
+	for (size_t i = 0; i < 4; i++) {
+		server->preview_border[i] = wlr_scene_rect_create(
+			server->preview_tree, 1, 1, preview_border_color);
+	}
+	server->snap_gauge_backdrop = wlr_scene_rect_create(
+		server->snap_gauge_tree, 1, 1, snap_gauge_backdrop_color);
+	server->snap_gauge_track = wlr_scene_rect_create(
+		server->snap_gauge_tree, 1, 1, snap_gauge_track_color);
+	server->snap_gauge_fill = wlr_scene_rect_create(
+		server->snap_gauge_tree, 1, 1, snap_gauge_fill_color);
+
+	wlr_scene_node_set_enabled(&server->preview_tree->node, false);
+	wlr_scene_node_set_enabled(&server->snap_gauge_tree->node, false);
+}
+
+static void drag_overlay_raise(struct nide_server *server) {
+	wlr_scene_node_raise_to_top(&server->overlay_tree->node);
+}
+
+static void drag_preview_hide(struct nide_server *server) {
+	if (server->drag_target != NIDE_SNAP_TARGET_NONE) {
+		wlr_log(WLR_DEBUG, "snap preview cleared");
+	}
+	server->drag_target = NIDE_SNAP_TARGET_NONE;
+	wlr_scene_node_set_enabled(&server->preview_tree->node, false);
+}
+
+static void drag_gauge_hide(struct nide_server *server) {
+	wlr_scene_node_set_enabled(&server->snap_gauge_tree->node, false);
+}
+
+static void drag_overlay_hide(struct nide_server *server) {
+	drag_preview_hide(server);
+	drag_gauge_hide(server);
+}
+
+static void drag_preview_show(struct nide_server *server,
+		enum nide_snap_target target, struct wlr_box box) {
+	int border = NIDE_PREVIEW_BORDER;
+	if (border * 2 > box.width) {
+		border = box.width / 2;
+	}
+	if (border * 2 > box.height) {
+		border = box.height / 2;
+	}
+	if (border < 1) {
+		border = 1;
+	}
+	int inner_h = box.height - border * 2;
+	if (inner_h < 1) {
+		inner_h = 1;
+	}
+
+	if (server->drag_target != target) {
+		const char *name = "fullscreen";
+		if (target == NIDE_SNAP_TARGET_LEFT) {
+			name = "left half";
+		} else if (target == NIDE_SNAP_TARGET_RIGHT) {
+			name = "right half";
+		}
+		wlr_log(WLR_DEBUG, "snap preview: %s", name);
+	}
+	server->drag_target = target;
+
+	wlr_scene_node_set_position(&server->preview_fill->node, box.x, box.y);
+	wlr_scene_rect_set_size(server->preview_fill, box.width, box.height);
+
+	wlr_scene_node_set_position(&server->preview_border[0]->node,
+		box.x, box.y);
+	wlr_scene_rect_set_size(server->preview_border[0], box.width, border);
+
+	wlr_scene_node_set_position(&server->preview_border[1]->node,
+		box.x, box.y + box.height - border);
+	wlr_scene_rect_set_size(server->preview_border[1], box.width, border);
+
+	wlr_scene_node_set_position(&server->preview_border[2]->node,
+		box.x, box.y + border);
+	wlr_scene_rect_set_size(server->preview_border[2], border, inner_h);
+
+	wlr_scene_node_set_position(&server->preview_border[3]->node,
+		box.x + box.width - border, box.y + border);
+	wlr_scene_rect_set_size(server->preview_border[3], border, inner_h);
+
+	wlr_scene_node_set_enabled(&server->preview_tree->node, true);
+	drag_overlay_raise(server);
+}
+
+static struct wlr_box drag_output_box(struct nide_server *server) {
+	struct wlr_box box = {0};
+	struct wlr_output *output = wlr_output_layout_output_at(
+		server->output_layout, server->cursor->x, server->cursor->y);
+
+	if (output != NULL) {
+		wlr_output_layout_get_box(server->output_layout, output, &box);
+	}
+	if ((box.width <= 0 || box.height <= 0) &&
+			server->grabbed_toplevel != NULL) {
+		box = toplevel_output_box(server->grabbed_toplevel, NULL);
+	}
+	if (box.width <= 0 || box.height <= 0) {
+		box = (struct wlr_box) {
+			.x = 0, .y = 0, .width = 1024, .height = 768,
+		};
+	}
+	return box;
+}
+
+static enum nide_snap_target drag_snap_target(struct nide_server *server,
+		struct wlr_box window) {
+	struct wlr_box box = drag_output_box(server);
+	int threshold = NIDE_SNAP_THRESHOLD;
+	int center = window.x + window.width / 2;
+	int box_center = box.x + box.width / 2;
+	int left_dist = window.x - box.x;
+	int right_dist = (box.x + box.width) - (window.x + window.width);
+	int top_dist = window.y - box.y;
+	int best = threshold + 1;
+	enum nide_snap_target target = NIDE_SNAP_TARGET_NONE;
+
+	if (left_dist < 0) {
+		left_dist = 0;
+	}
+	if (right_dist < 0) {
+		right_dist = 0;
+	}
+	if (top_dist < 0) {
+		top_dist = 0;
+	}
+
+	/* A tie favours the side edge, which is the more common gesture. */
+	if (left_dist <= threshold && center < box_center &&
+			left_dist <= best) {
+		target = NIDE_SNAP_TARGET_LEFT;
+		best = left_dist;
+	}
+	if (right_dist <= threshold && center > box_center &&
+			right_dist < best) {
+		target = NIDE_SNAP_TARGET_RIGHT;
+		best = right_dist;
+	}
+	if (top_dist <= threshold && top_dist < best) {
+		target = NIDE_SNAP_TARGET_FULLSCREEN;
+	}
+
+	return target;
+}
+
+static struct wlr_box drag_preview_box(struct nide_server *server,
+		enum nide_snap_target target) {
+	struct wlr_box box = drag_output_box(server);
+
+	if (target == NIDE_SNAP_TARGET_FULLSCREEN) {
+		return box;
+	}
+
+	return snap_box_for_output(box, server->config.maximize_margin,
+		target == NIDE_SNAP_TARGET_LEFT);
+}
+
+static void drag_preview_update(struct nide_server *server,
+		struct nide_toplevel *toplevel) {
+	struct wlr_box *geo = &toplevel->xdg_toplevel->base->geometry;
+	struct wlr_box window = {
+		.x = (int)toplevel->scene_tree->node.x + geo->x,
+		.y = (int)toplevel->scene_tree->node.y + geo->y,
+		.width = geo->width > 0 ? geo->width : 800,
+		.height = geo->height > 0 ? geo->height : 600,
+	};
+	enum nide_snap_target target;
+
+	if (!server->move_started ||
+			toplevel->state != NIDE_TOPLEVEL_FLOATING) {
+		drag_preview_hide(server);
+		return;
+	}
+
+	if (server->drag_suppressed == NIDE_SNAP_TARGET_LEFT ||
+			server->drag_suppressed == NIDE_SNAP_TARGET_RIGHT) {
+		struct wlr_box output = drag_output_box(server);
+		bool cleared;
+
+		if (server->drag_suppressed == NIDE_SNAP_TARGET_LEFT) {
+			cleared = window.x - output.x > NIDE_SNAP_THRESHOLD;
+		} else {
+			cleared = output.x + output.width -
+				(window.x + window.width) > NIDE_SNAP_THRESHOLD;
+		}
+		if (cleared) {
+			server->drag_suppressed = NIDE_SNAP_TARGET_NONE;
+		}
+	}
+
+	target = drag_snap_target(server, window);
+	if (target == server->drag_suppressed) {
+		target = NIDE_SNAP_TARGET_NONE;
+	}
+	if (target == NIDE_SNAP_TARGET_NONE) {
+		drag_preview_hide(server);
+		return;
+	}
+
+	drag_preview_show(server, target, drag_preview_box(server, target));
+}
+
+static void snap_gauge_update(struct nide_server *server,
+		struct nide_toplevel *toplevel, double pressure) {
+	struct wlr_box box = toplevel_snap_box(toplevel);
+	struct wlr_box output = toplevel_output_box(toplevel, NULL);
+	bool left = toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT;
+	int bar_w = 6;
+	int gap;
+	int bar_x;
+	int track_h;
+	int track_y;
+	int fill_h;
+
+	if (pressure < 0) {
+		pressure = 0;
+	}
+	if (pressure > 1) {
+		pressure = 1;
+	}
+
+	if (left) {
+		gap = box.x - output.x;
+		if (gap >= bar_w + 2) {
+			bar_x = output.x + (gap - bar_w) / 2;
+		} else {
+			bar_x = box.x + 2;
+		}
+	} else {
+		gap = output.x + output.width - (box.x + box.width);
+		if (gap >= bar_w + 2) {
+			bar_x = box.x + box.width + (gap - bar_w) / 2;
+		} else {
+			bar_x = box.x + box.width - bar_w - 2;
+		}
+	}
+
+	track_h = box.height - 16;
+	if (track_h > 180) {
+		track_h = 180;
+	}
+	if (track_h > box.height) {
+		track_h = box.height;
+	}
+	if (track_h < 1) {
+		track_h = 1;
+	}
+	track_y = box.y + (box.height - track_h) / 2;
+
+	wlr_scene_node_set_position(&server->snap_gauge_backdrop->node,
+		bar_x - 2, track_y - 4);
+	wlr_scene_rect_set_size(server->snap_gauge_backdrop,
+		bar_w + 4, track_h + 8);
+
+	wlr_scene_node_set_position(&server->snap_gauge_track->node,
+		bar_x, track_y);
+	wlr_scene_rect_set_size(server->snap_gauge_track, bar_w, track_h);
+
+	fill_h = track_h / 4 +
+		(int)((track_h - track_h / 4) * pressure);
+	if (fill_h < 1) {
+		fill_h = 1;
+	}
+	wlr_scene_node_set_position(&server->snap_gauge_fill->node,
+		bar_x, track_y + (track_h - fill_h) / 2);
+	wlr_scene_rect_set_size(server->snap_gauge_fill, bar_w, fill_h);
+
+	wlr_scene_node_set_enabled(&server->snap_gauge_tree->node, true);
+	drag_overlay_raise(server);
 }
 
 static void toplevel_apply_snap(struct nide_toplevel *toplevel) {
@@ -1077,20 +1445,57 @@ static void toplevel_to_floating(struct nide_toplevel *toplevel,
 static void toplevel_break_snap(struct nide_toplevel *toplevel) {
 	struct nide_server *server = toplevel->server;
 	struct wlr_box box = toplevel->floating_geometry;
+	struct wlr_box output = toplevel_output_box(toplevel, NULL);
+	bool was_left = toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT;
+	double grab_x = toplevel->snap_grab_x;
+	double grab_y = toplevel->snap_grab_y;
+	int clearance = NIDE_SNAP_THRESHOLD + 2;
+
+	if (grab_x < 0) {
+		grab_x = 0;
+	} else if (grab_x > 1) {
+		grab_x = 1;
+	}
+	if (grab_y < 0) {
+		grab_y = 0;
+	} else if (grab_y > 1) {
+		grab_y = 1;
+	}
 
 	if (box.width < 1 || box.height < 1) {
 		box.width = 800;
 		box.height = 600;
 	}
 
-	box.x = (int)server->cursor->x - box.width / 2;
-	box.y = (int)server->cursor->y - box.height / 2;
+	box.x = (int)(server->cursor->x - box.width * grab_x);
+	box.y = (int)(server->cursor->y - box.height * grab_y);
+
+	/*
+	 * Move the restored window just outside the snap zone. Otherwise it
+	 * would still touch the edge it came from and the drag preview would
+	 * immediately snap it back.
+	 */
+	if (box.width <= output.width - clearance * 2) {
+		if (was_left) {
+			int min_x = output.x + clearance;
+			if (box.x < min_x) {
+				box.x = min_x;
+			}
+		} else {
+			int max_x = output.x + output.width - clearance -
+				box.width;
+			if (box.x > max_x) {
+				box.x = max_x;
+			}
+		}
+	}
 
 	toplevel->floating_geometry = box;
 	toplevel->has_floating_geometry = true;
 	toplevel->state = NIDE_TOPLEVEL_FLOATING;
-	toplevel->snap_suppressed = true;
 	toplevel->restore_floating_pending = true;
+	server->drag_suppressed = was_left ?
+		NIDE_SNAP_TARGET_LEFT : NIDE_SNAP_TARGET_RIGHT;
 
 	wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
 	toplevel_apply_box(toplevel, box, true);
@@ -1099,6 +1504,9 @@ static void toplevel_break_snap(struct nide_toplevel *toplevel) {
 		toplevel->scene_tree->node.x;
 	server->grab_y = server->cursor->y -
 		toplevel->scene_tree->node.y;
+
+	wlr_log(WLR_DEBUG, "snap released: floating geometry %dx%d+%d+%d",
+		box.width, box.height, box.x, box.y);
 }
 
 static void toplevel_snap(struct nide_toplevel *toplevel,
@@ -1109,11 +1517,31 @@ static void toplevel_snap(struct nide_toplevel *toplevel,
 
 	toplevel->state = side;
 	toplevel->snap_anchor_x = toplevel->server->cursor->x;
-	toplevel->snap_suppressed = false;
 	toplevel_apply_snap(toplevel);
 
 	wlr_log(WLR_DEBUG, "snapped window to %s half",
 		side == NIDE_TOPLEVEL_SNAPPED_LEFT ? "left" : "right");
+}
+
+static void toplevel_apply_drag_target(struct nide_toplevel *toplevel,
+		enum nide_snap_target target) {
+	if (toplevel->state != NIDE_TOPLEVEL_FLOATING) {
+		return;
+	}
+
+	switch (target) {
+	case NIDE_SNAP_TARGET_LEFT:
+		toplevel_snap(toplevel, NIDE_TOPLEVEL_SNAPPED_LEFT);
+		break;
+	case NIDE_SNAP_TARGET_RIGHT:
+		toplevel_snap(toplevel, NIDE_TOPLEVEL_SNAPPED_RIGHT);
+		break;
+	case NIDE_SNAP_TARGET_FULLSCREEN:
+		toplevel_enter_fullscreen(toplevel);
+		break;
+	case NIDE_SNAP_TARGET_NONE:
+		break;
+	}
 }
 
 static void toplevel_reapply_state(struct nide_toplevel *toplevel) {
@@ -1221,16 +1649,38 @@ static void begin_interactive(struct nide_toplevel *toplevel,
 	server->grabbed_toplevel = toplevel;
 	server->cursor_mode = mode;
 
+	drag_overlay_hide(server);
+	server->drag_suppressed = NIDE_SNAP_TARGET_NONE;
+	server->move_start_x = server->cursor->x;
+	server->move_start_y = server->cursor->y;
+	server->move_started = false;
+
 	if (mode == NIDE_CURSOR_MOVE) {
 		if (toplevel->state == NIDE_TOPLEVEL_MAXIMIZED ||
 				toplevel->state == NIDE_TOPLEVEL_FULLSCREEN) {
 			toplevel_to_floating(toplevel, false);
-			toplevel->snap_suppressed = false;
 		} else if (toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT ||
 				toplevel->state == NIDE_TOPLEVEL_SNAPPED_RIGHT) {
 			toplevel->snap_anchor_x = server->cursor->x;
-		} else {
-			toplevel->snap_suppressed = false;
+			toplevel->snap_anchor_y = server->cursor->y;
+
+			struct wlr_box geo = toplevel_geometry(toplevel);
+			toplevel->snap_grab_x = geo.width > 0 ?
+				(server->cursor->x - geo.x) / geo.width : 0.5;
+			toplevel->snap_grab_y = geo.height > 0 ?
+				(server->cursor->y - geo.y) / geo.height : 0.5;
+			if (toplevel->snap_grab_x < 0) {
+				toplevel->snap_grab_x = 0;
+			} else if (toplevel->snap_grab_x > 1) {
+				toplevel->snap_grab_x = 1;
+			}
+			if (toplevel->snap_grab_y < 0) {
+				toplevel->snap_grab_y = 0;
+			} else if (toplevel->snap_grab_y > 1) {
+				toplevel->snap_grab_y = 1;
+			}
+
+			snap_gauge_update(server, toplevel, 0);
 		}
 
 		server->grab_x = server->cursor->x - toplevel->scene_tree->node.x;
@@ -1262,63 +1712,55 @@ static void begin_interactive(struct nide_toplevel *toplevel,
 static void process_cursor_move(struct nide_server *server) {
 	struct nide_toplevel *toplevel = server->grabbed_toplevel;
 
+	if (!server->move_started) {
+		double dx = server->cursor->x - server->move_start_x;
+		double dy = server->cursor->y - server->move_start_y;
+
+		server->move_started = dx * dx + dy * dy >= 9;
+	}
+
 	if (toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT ||
 			toplevel->state == NIDE_TOPLEVEL_SNAPPED_RIGHT) {
 		bool left = toplevel->state == NIDE_TOPLEVEL_SNAPPED_LEFT;
-		double delta_x = server->cursor->x - toplevel->snap_anchor_x;
-		double toward_edge = left ? -delta_x : delta_x;
-		double away_from_edge = left ? delta_x : -delta_x;
+		double away_x = left ?
+			server->cursor->x - toplevel->snap_anchor_x :
+			toplevel->snap_anchor_x - server->cursor->x;
+		double away_y = server->cursor->y - toplevel->snap_anchor_y;
+		double pressure;
 
-		if (toward_edge < NIDE_SNAP_BREAKOUT &&
-				away_from_edge < NIDE_SNAP_BREAKOUT) {
+		/*
+		 * Pushing toward the snapped edge must never detach. Pulling
+		 * inward horizontally or vertically builds up pressure until
+		 * the window breaks free.
+		 */
+		if (away_x < 0) {
+			away_x = 0;
+		}
+		pressure = sqrt(away_x * away_x + away_y * away_y) /
+			NIDE_SNAP_RESISTANCE;
+
+		if (pressure < 1) {
+			snap_gauge_update(server, toplevel, pressure);
 			return;
 		}
+
+		/*
+		 * The window has been pulled past the resistance threshold.
+		 * Restore its floating size and keep the pointer at the same
+		 * relative position inside it.
+		 */
+		drag_gauge_hide(server);
 		toplevel_break_snap(toplevel);
 	}
 
-	struct wlr_box *geo = &toplevel->xdg_toplevel->base->geometry;
 	int node_x = (int)(server->cursor->x - server->grab_x);
 	int node_y = (int)(server->cursor->y - server->grab_y);
-	struct wlr_box window = {
-		.x = node_x + geo->x,
-		.y = node_y + geo->y,
-		.width = geo->width > 0 ? geo->width : 800,
-		.height = geo->height > 0 ? geo->height : 600,
-	};
-
-	if (!toplevel->snap_suppressed &&
-			toplevel->state == NIDE_TOPLEVEL_FLOATING) {
-		struct wlr_output *output = wlr_output_layout_output_at(
-			server->output_layout, server->cursor->x,
-			server->cursor->y);
-		struct wlr_box box = {0};
-		if (output != NULL) {
-			wlr_output_layout_get_box(server->output_layout,
-				output, &box);
-		}
-		if (box.width > 0 && box.height > 0) {
-			if (window.x <= box.x + NIDE_SNAP_THRESHOLD &&
-					window.x + window.width >
-						box.x + NIDE_SNAP_THRESHOLD) {
-				toplevel_snap(toplevel,
-					NIDE_TOPLEVEL_SNAPPED_LEFT);
-				return;
-			}
-			if (window.x + window.width >=
-					box.x + box.width - NIDE_SNAP_THRESHOLD &&
-					window.x <
-						box.x + box.width - NIDE_SNAP_THRESHOLD) {
-				toplevel_snap(toplevel,
-					NIDE_TOPLEVEL_SNAPPED_RIGHT);
-				return;
-			}
-		}
-	}
 
 	wlr_scene_node_set_position(&toplevel->scene_tree->node, node_x, node_y);
 	if (toplevel->state == NIDE_TOPLEVEL_FLOATING) {
 		toplevel_capture_floating(toplevel);
 	}
+	drag_preview_update(server, toplevel);
 }
 
 static void process_cursor_resize(struct nide_server *server) {
@@ -1651,6 +2093,15 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 	struct wlr_pointer_button_event *event = data;
 
 	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+		if (server->cursor_mode == NIDE_CURSOR_MOVE &&
+				server->grabbed_toplevel != NULL &&
+				server->drag_target != NIDE_SNAP_TARGET_NONE) {
+			struct nide_toplevel *toplevel = server->grabbed_toplevel;
+			enum nide_snap_target target = server->drag_target;
+
+			drag_overlay_hide(server);
+			toplevel_apply_drag_target(toplevel, target);
+		}
 		if (server->cursor_mode != NIDE_CURSOR_PASSTHROUGH) {
 			reset_cursor_mode(server);
 			return;
@@ -2299,6 +2750,7 @@ int main(int argc, char *argv[]) {
 	server.scene = wlr_scene_create();
 	server.scene_layout = wlr_scene_attach_output_layout(server.scene,
 		server.output_layout);
+	drag_overlay_init(&server);
 
 	server.xdg_shell = wlr_xdg_shell_create(server.display, 3);
 	server.new_xdg_toplevel.notify = server_new_xdg_toplevel;
