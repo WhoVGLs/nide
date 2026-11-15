@@ -1,5 +1,5 @@
 CC      ?= cc
-PKG     := wlroots-0.20 wayland-server xkbcommon lua5.4
+PKG     := wlroots-0.20 wayland-server xkbcommon lua5.4 cairo
 CFLAGS  ?= -O2 -g
 CFLAGS  += -std=c11 -D_GNU_SOURCE -DWLR_USE_UNSTABLE -Wall -Wextra \
            -Wno-unused-parameter $(shell pkg-config --cflags $(PKG))

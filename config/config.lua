@@ -5,7 +5,8 @@
 --   nide.bind("modifier+key", "action", "argument")
 --
 -- Modifiers: shift, ctrl, alt, super (can be combined with +).
--- Actions  : spawn (run a command), close, maximize, fullscreen, quit.
+-- Actions  : spawn (run a command), close, maximize, fullscreen, launcher,
+--            quit.
 --
 -- nide.maximize_margin sets the gap in pixels around maximized and snapped
 -- windows. Fullscreen always fills the output. Default: 8.
@@ -27,6 +28,10 @@ nide.bind("super+c", "close")
 -- Super+M maximizes; Super+S toggles fullscreen.
 nide.bind("super+m", "maximize")
 nide.bind("super+s", "fullscreen")
+
+-- Super+Tab opens the built-in launcher. Search applications, or switch
+-- between open windows using the tabs.
+nide.bind("super+tab", "launcher")
 
 -- Optional: quit the compositor.
 nide.bind("super+shift+q", "quit")

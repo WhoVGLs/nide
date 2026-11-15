@@ -5,6 +5,25 @@ All notable changes to NIDE are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-11-15
+
+### Added
+
+- Built-in launcher overlay, bound to `Super+Tab` by default, combining
+  application search with a dock-style list of open windows.
+- **Open Windows** tab lists every open window, focuses a window when selected,
+  and shows a count badge for how many windows each application has open. The
+  list updates while the launcher is open.
+- **All Apps** tab discovers applications from XDG `.desktop` files, searches
+  them, and shows which applications already have open windows.
+- Launcher layout with a search field, two rounded tabs, a 5x3 tile grid,
+  pagination arrows and dots, and keyboard, mouse, and scroll navigation.
+- `launcher` Lua action for opening or closing the launcher. Existing configs
+  without the binding can still use the built-in `Super+Tab` fallback.
+- Launcher rendering uses Cairo for the panel, text, generated initial-based
+  application icons, and count badges. Cairo is now a build dependency.
+- Terminal desktop entries are launched through `foot -e`.
+
 ## [0.3.2] - 2026-11-15
 
 ### Changed

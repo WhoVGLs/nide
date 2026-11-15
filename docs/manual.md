@@ -1,6 +1,6 @@
 # NIDE — Complete Guide
 
-**Version:** 0.3.2
+**Version:** 0.4.0
 
 **Document:** November 15, 2026
 
@@ -33,6 +33,8 @@ that acts as a minimal desktop environment. Think of it as a very minimal
 - Plain windows: no title bar, border, or close button.
 - All keybindings are configured in a Lua file.
 - The config reloads automatically when the file is saved (hot reload).
+- A built-in launcher (Super+Tab) searches applications and switches between
+  open windows, so no separate dock or taskbar is needed.
 - Just one small binary and one config file.
 
 NIDE is NOT an application that can run inside KDE as a regular window
@@ -64,8 +66,11 @@ Xephyr. Useful for testing.
 Requirements on Arch Linux:
 
 ```sh
-sudo pacman -S --needed base-devel wlroots0.20 lua54
+sudo pacman -S --needed base-devel wlroots0.20 lua54 cairo
 ```
+
+Other distributions need the wlroots 0.20 development headers, Lua 5.4,
+wayland-server, xkbcommon, and Cairo.
 
 Build from the project directory:
 
@@ -194,13 +199,13 @@ Notes:
   XWayland.
 - If ":5 is already active", use :6, :7, etc.
 - After the Xephyr window appears, CLICK inside it first.
-- NIDE keybindings (Super+W, Super+C, Super+M, Super+S, and Super+Shift+Q)
-  only work after the Xephyr window has focus.
+- NIDE keybindings (Super+W, Super+C, Super+M, Super+S, Super+Tab, and
+  Super+Shift+Q) only work after the Xephyr window has focus.
 
 If the Super key does not reach NIDE, a KDE global shortcut may be grabbing
-it first (for example, Super+W for Overview). For nested testing, temporarily
-change the binding to alt+w in the config, or test in a full session
-(greeter/TTY) that has no KDE shortcuts.
+it first (for example, Super+W for Overview or Super+Tab for task switching).
+For nested testing, temporarily change the binding to another combination in
+the config, or test in a full session (greeter/TTY) that has no KDE shortcuts.
 
 When done, quit NIDE with Super+Shift+Q, then close the Xephyr window.
 
@@ -233,6 +238,24 @@ shift by 32 pixels so they do not overlap exactly.
 
 **Focus** — Click a window to focus it. New windows are focused automatically.
 Click an empty area to release keyboard focus.
+
+**Launcher** — Press Super+Tab to open the launcher overlay. It opens on the
+**Open Windows** tab when at least one window is running, otherwise on
+**All Apps**. Both tabs use a 5x3 grid with 15 results per page.
+
+- **Open Windows** lists each open window separately. The badge shows how many
+  windows that application has open. Selecting a tile raises and focuses that
+  window.
+- **All Apps** lists applications discovered from XDG `.desktop` files and
+  shows a badge when that application already has windows open. Launching a
+  terminal application uses `foot -e`.
+- Type to search the current tab's names and window titles. Use the arrow keys
+  to move, Enter to launch or focus, Tab to switch tabs, Page Up/Page Down or
+  the mouse wheel to change pages, and Esc or Super+Tab to close.
+- Click a tile or tab to use it. Clicking outside the panel closes the
+  launcher. The page arrows and dots are also clickable.
+- Launcher icons are generated from colored initials; application icon files
+  are not loaded yet.
 
 **Moving windows** — Hold Super, left-click anywhere on the window, and drag.
 Release the mouse button to finish.
@@ -273,9 +296,11 @@ connection and close. Save your work first.
 **Clipboard** — Normal copy/paste is supported. Middle-click paste (primary
 selection) is also supported.
 
-**What is not available** — No close/minimize/maximize buttons, no Alt+Tab, no
-bar/panel, and no workspaces. Use Super+C to close, Super+M to maximize, and
-Super+S for fullscreen. Focus changes by clicking or when a new window opens.
+**What is not available** — No close/minimize/maximize buttons, no traditional
+Alt+Tab, no dock/panel, and no workspaces. Use Super+C to close, Super+M to
+maximize, and Super+S for fullscreen. Use the launcher's Open Windows tab to
+switch between open windows. Focus also changes by clicking or when a new
+window opens.
 
 ## 6. Configuration
 
@@ -326,13 +351,16 @@ nide.bind("super+w", "spawn", "foot")
 nide.bind("super+c", "close")
 nide.bind("super+m", "maximize")
 nide.bind("super+s", "fullscreen")
+nide.bind("super+tab", "launcher")
 nide.bind("super+shift+q", "quit")
 ```
 
 IMPORTANT: the default bindings are used only when no config file exists at
 all. If a config file is found, its contents are used as-is; the default
 bindings are NOT added automatically. So if the config only contains Super+W,
-then Super+C, Super+M, Super+S, and Super+Shift+Q do not exist.
+then Super+C, Super+M, Super+S, Super+Tab, and Super+Shift+Q do not exist.
+Super+Tab still has a small fallback so the launcher can always be reached,
+but adding the binding explicitly is recommended.
 
 Always include at least one quit binding, for example:
 
@@ -362,13 +390,14 @@ nide.bind("super+w", "spawn", "foot")
 nide.bind("super+c", "close")
 nide.bind("super+m", "maximize")
 nide.bind("super+s", "fullscreen")
+nide.bind("super+tab", "launcher")
 nide.bind("super+shift+q", "quit")
 ```
 
 Rules:
 
 - Two arguments for actions without an argument (close, maximize,
-  fullscreen, quit); three arguments for spawn.
+  fullscreen, launcher, quit); three arguments for spawn.
 - The combination and action name are written as strings (use quotes).
 - The last part of the combination is the key name. The preceding parts are
   modifiers.
@@ -465,6 +494,10 @@ again returns the window to its previous state (floating, maximized, or
 snapped). Application-initiated fullscreen, such as F11 in a browser or game,
 works the same way.
 
+**launcher** — Opens or closes the built-in launcher overlay. No argument
+needed. The launcher searches applications from XDG `.desktop` files and lists
+open windows in two tabs. The default binding is Super+Tab.
+
 **quit** — Quits the compositor. No argument needed. All Wayland applications
 are disconnected and closed. Save your work first.
 
@@ -479,14 +512,11 @@ Everyday example:
 -- Your favorite terminal. Change it to one you have installed.
 local terminal = "foot"
 
--- Application launcher (optional, must be installed).
-local launcher = "fuzzel"
-
 -- Open a terminal.
 nide.bind("super+w", "spawn", terminal)
 
--- Open the launcher.
-nide.bind("super+d", "spawn", launcher)
+-- Open the built-in launcher.
+nide.bind("super+tab", "launcher")
 
 -- Close the focused window.
 nide.bind("super+c", "close")
@@ -517,6 +547,7 @@ nide.bind("super+t", "spawn", terminal .. " --title=new-terminal")
 nide.bind("super+c", "close")
 nide.bind("super+m", "maximize")
 nide.bind("super+s", "fullscreen")
+nide.bind("super+tab", "launcher")
 nide.maximize_margin = 12
 nide.bind("super+shift+q", "quit")
 ```
@@ -584,11 +615,12 @@ Example of valid output:
 ```text
 Config: /home/user/.config/nide/config.lua
 Maximize margin: 8
-Keybindings (5):
+Keybindings (6):
   super+w              -> spawn foot
   super+c              -> close
   super+m              -> maximize
   super+s              -> fullscreen
+  super+tab            -> launcher
   super+shift+q        -> quit
 ```
 
@@ -611,7 +643,7 @@ hot reload active for /home/user/.config/nide/config.lua
 On a successful reload:
 
 ```text
-config reloaded: /home/user/.config/nide/config.lua (4 keybindings)
+config reloaded: /home/user/.config/nide/config.lua (6 keybindings)
 ```
 
 Rules and behavior:
@@ -687,6 +719,13 @@ screen edge.
 **Focus** — New windows are focused immediately. Click another window to
 switch. Clicking an empty area releases keyboard focus.
 
+**Launcher** — The launcher is a centered overlay with a dimmed background,
+a search field, two tabs, a 5x3 tile grid, count badges, and pagination
+controls. Open Windows tiles update when windows open or close. All Apps reads
+XDG `.desktop` files the first time the launcher opens; restart NIDE to pick
+up newly installed applications. Application icons are colored initials for
+now, not icon files from the desktop entries.
+
 **Maximize and fullscreen** — Super+M maximizes the focused window with a
 margin from `nide.maximize_margin` (default 8 pixels). Saving a changed margin
 applies it to open maximized and snapped windows. Super+S toggles true
@@ -741,7 +780,7 @@ Examples:
 `--version` prints the NIDE version, for example:
 
 ```text
-nide 0.3.2
+nide 0.4.0
 ```
 
 Relevant environment variables:
@@ -774,9 +813,12 @@ available:
 
 - XWayland. X11 applications cannot run.
 - layer-shell. Bars/panels such as Waybar and layer-shell-based notifications
-  are not supported.
+  are not supported. Use the launcher's Open Windows tab instead of a dock or
+  taskbar.
 - Minimize, animations, shadows, and decorations.
-- Alt+Tab / window switcher and workspaces.
+- A traditional Alt+Tab switcher and workspaces. The launcher's Open Windows
+  tab provides window switching.
+- Launcher icon files. Icons are generated from colored initials.
 - Tiling or automatic layout management; only edge snapping (left/right
   halves and top fullscreen) is available.
 - Manual multi-monitor position/scale configuration.
@@ -823,6 +865,18 @@ section 4.3.
 - Make sure foot is installed: `command -v foot`.
 - A KDE global shortcut may be grabbing Super+W. Try changing the binding to
   alt+w temporarily, or test in a full session.
+
+**Super+Tab does not open the launcher**
+
+- Make sure the NIDE output or Xephyr window has keyboard focus.
+- Super+Tab is also a built-in fallback, but adding
+  `nide.bind("super+tab", "launcher")` to the config is recommended.
+- A desktop environment global shortcut may grab Super+Tab when testing
+  nested. Rebind the action to another combination, for example
+  `nide.bind("super+space", "launcher")`.
+- If the All Apps tab is empty, check that `.desktop` files exist in
+  `~/.local/share/applications` or `/usr/share/applications` and that they are
+  not marked `Hidden=true` or `NoDisplay=true`.
 
 **Terminal does not appear and there is no error message**
 
@@ -954,7 +1008,20 @@ Super+W          open foot
 Super+C          close focused window
 Super+M          maximize with margin
 Super+S          toggle fullscreen
+Super+Tab        open/close the launcher
 Super+Shift+Q    quit NIDE
+```
+
+Launcher keys:
+
+```text
+Type             search the current tab
+Arrow keys       move the selection
+Enter            launch app or focus window
+Tab              switch Open Windows / All Apps
+Page Up/Down     change page
+Mouse wheel      change page
+Esc / Super+Tab  close
 ```
 
 Mouse:
@@ -974,6 +1041,7 @@ nide.bind("super+w", "spawn", terminal)
 nide.bind("super+c", "close")
 nide.bind("super+m", "maximize")
 nide.bind("super+s", "fullscreen")
+nide.bind("super+tab", "launcher")
 nide.maximize_margin = 8
 nide.bind("super+shift+q", "quit")
 ```

@@ -5,7 +5,7 @@ name, NIDE is a small, simple Wayland compositor built with
 [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 and configured
 entirely with Lua.
 
-Current version: **NIDE 0.3.2**.
+Current version: **NIDE 0.4.0**.
 
 ## What is NIDE?
 
@@ -15,12 +15,14 @@ small and simple:
 
 - Windows float and have no decorations, so applications look plain.
 - Almost everything is driven from the keyboard.
+- A built-in launcher searches applications and lists open windows, replacing
+  the need for a dock, taskbar, or separate application menu.
 - Behavior and keybindings are configured in a single Lua file.
 - Config changes take effect immediately without a restart.
 
-NIDE is not a full desktop. It has no panel, launcher, workspaces, or
-animations. It is a good fit if you want a lightweight, fast Wayland
-environment that is easy to customize with Lua.
+NIDE is not a full desktop. It has no panel, dock, workspaces, or animations.
+It is a good fit if you want a lightweight, fast Wayland environment that is
+easy to customize with Lua.
 
 The project configuration lives in [`config/config.lua`](config/config.lua),
 and the complete guide is in [`docs/manual.md`](docs/manual.md).
@@ -34,6 +36,11 @@ and the complete guide is in [`docs/manual.md`](docs/manual.md).
 - Lua keybinding configuration, read from `~/.config/nide/config.lua`.
 - Hot reload: saving the config file updates bindings without a restart.
 - `Super+W` opens a terminal, `Super+C` closes the focused window.
+- `Super+Tab` opens the built-in launcher. It has two tabs: **Open Windows**
+  switches between running windows and shows how many windows each application
+  has open, while **All Apps** searches applications discovered from XDG
+  `.desktop` files. Results use a 5x3 tile grid with keyboard and mouse
+  navigation, search, and pagination.
 - `Super+M` maximizes with a configurable margin; `Super+S` toggles fullscreen.
 - Edge snapping with a live preview: while moving a window, drag the pointer to
   the left or right screen edge to preview that half of the screen, or to the
@@ -45,18 +52,18 @@ and the complete guide is in [`docs/manual.md`](docs/manual.md).
 - Application fullscreen requests work, including F11 in browsers and games.
 - `Super+left-click` moves a window, `Super+right-click` resizes it.
 - Clipboard and primary selection (middle-click paste) are supported.
-- One small binary, one C file, no toolkit dependency.
+- One small binary and one C file. Cairo is used only to render the launcher.
 
 ## Requirements
 
 Arch Linux:
 
 ```sh
-sudo pacman -S --needed base-devel wlroots0.20 lua54
+sudo pacman -S --needed base-devel wlroots0.20 lua54 cairo
 ```
 
 Other distributions need the wlroots **0.20** development headers, Lua **5.4**,
-wayland-server, and xkbcommon.
+wayland-server, xkbcommon, and Cairo.
 
 ## Build
 
@@ -127,6 +134,7 @@ nide.bind("super+w", "spawn", "foot")
 nide.bind("super+c", "close")
 nide.bind("super+m", "maximize")
 nide.bind("super+s", "fullscreen")
+nide.bind("super+tab", "launcher")
 nide.bind("super+shift+q", "quit")
 ```
 
@@ -139,6 +147,7 @@ nide.bind("super+w", "spawn", terminal)
 nide.bind("super+c", "close")
 nide.bind("super+m", "maximize")
 nide.bind("super+s", "fullscreen")
+nide.bind("super+tab", "launcher")
 nide.bind("super+shift+q", "quit")
 
 -- Gap in pixels around maximized and snapped windows. Default: 8.
@@ -163,6 +172,7 @@ Actions:
 | `close` | — | closes the focused window |
 | `maximize` | — | maximizes with a configurable margin |
 | `fullscreen` | — | toggles fullscreen |
+| `launcher` | — | opens or closes the built-in launcher |
 | `quit` | — | quits the compositor |
 
 `nide.maximize_margin` sets the gap in pixels around maximized windows. It
@@ -186,6 +196,33 @@ the file is saved. Open windows keep running, and a changed
 Configs with errors or no keybindings are ignored, and the previous config
 stays active. If NIDE starts without a config file (default mode), restart it
 once after creating a config.
+
+## Launcher
+
+Press `Super+Tab` to open the launcher overlay. It opens in **Open Windows**
+mode when at least one window is running, otherwise in **All Apps** mode.
+
+- **Open Windows** lists each open window individually. The badge on each tile
+  shows how many windows that application has open. Selecting a tile raises
+  and focuses that window.
+- **All Apps** lists applications found in XDG application directories. It
+  runs the application's `.desktop` `Exec` command, using `foot -e` when the
+  entry has `Terminal=true`. The badge shows how many windows are already open
+  for that application.
+- Type to search the current tab's names and window titles. Use the arrow keys
+  to move, `Enter` to open/focus, `Tab` to switch tabs, `Page Up`/`Page Down`
+  or the mouse wheel to change pages, and `Esc` or `Super+Tab` to close.
+- The launcher supports 15 tiles per page (5x3), page arrows, and pagination
+  dots. Clicking a tile or tab works as expected; clicking outside the panel
+  closes the launcher.
+- Application icons are generated from colored initials for now; icon files
+  from `.desktop` entries are not loaded yet.
+
+The action name is `launcher`, so it can be rebound:
+
+```lua
+nide.bind("super+d", "launcher")
+```
 
 ## Decorations and window behavior
 
@@ -213,8 +250,10 @@ Consequences:
 - Wayland-native applications only. XWayland is not enabled, so X11
   applications cannot run.
 - No layer-shell, so Wayland bars/panels (Waybar, etc.) are not supported.
+  Use the launcher's **Open Windows** tab instead of a dock or taskbar.
 - No minimize, animations, shadows, or decorations.
 - No input method (IME) support.
+- Launcher icons are colored initials; application icon files are not read.
 - Single output configuration; no manual multi-monitor positioning.
 
 ## Layout
@@ -241,4 +280,4 @@ New features and changes that break existing configs increase `MINOR`; bug
 fixes increase `PATCH`. Every release is documented in
 [`CHANGELOG.md`](CHANGELOG.md).
 
-Current version: **0.3.2**.
+Current version: **0.4.0**.
