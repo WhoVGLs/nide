@@ -70,6 +70,13 @@
 #define NIDE_LAUNCHER_PAGE_SIZE \
 	(NIDE_LAUNCHER_COLS * NIDE_LAUNCHER_ROWS)
 #define NIDE_LAUNCHER_QUERY_MAX 63
+#define NIDE_LAUNCHER_ICON_CACHE 64
+
+struct nide_launcher_icon {
+	char path[512];
+	cairo_surface_t *surface;
+	uint64_t used;
+};
 
 #define NIDE_MOD_MASK \
 	(WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO)
@@ -131,6 +138,7 @@ struct nide_app {
 	char name[128];
 	char exec[512];
 	char id[128];
+	char icon[512];
 	bool terminal;
 };
 
@@ -139,6 +147,7 @@ struct nide_launcher_item {
 	char detail[256];
 	char exec[512];
 	char app_id[128];
+	char icon[512];
 	int count;
 	bool terminal;
 	struct nide_toplevel *toplevel;
@@ -163,18 +172,25 @@ struct nide_launcher {
 	int filtercap;
 
 	int selected;
-	int page;
+	int scroll;
+	bool scrollbar_dragging;
+	double scrollbar_grab;
+	struct wlr_box scrollbar;
+	struct wlr_box scroll_track;
+
+	struct nide_launcher_icon icons[NIDE_LAUNCHER_ICON_CACHE];
+	int nicons;
+	uint64_t icon_tick;
 
 	struct wlr_box output;
 	struct wlr_box panel;
 	struct wlr_box search;
 	struct wlr_box tabs[2];
 	struct wlr_box grid;
-	struct wlr_box prev;
-	struct wlr_box next;
 	int tile_w;
 	int tile_h;
 	int gap;
+	int icon_size;
 };
 
 struct nide_server {
@@ -238,7 +254,6 @@ struct nide_server {
 	bool snap_gauge_visible;
 
 	struct wlr_scene_tree *launcher_tree;
-	struct wlr_scene_rect *launcher_dim;
 	struct wlr_scene_buffer *launcher_scene_buffer;
 	struct nide_launcher launcher;
 
@@ -330,6 +345,7 @@ static void launcher_handle_key(struct nide_server *server,
 		struct nide_keyboard *keyboard,
 		struct wlr_keyboard_key_event *event);
 static void launcher_handle_click(struct nide_server *server, uint32_t button);
+static void launcher_handle_release(struct nide_server *server);
 static void launcher_handle_axis(struct nide_server *server,
 		struct wlr_pointer_axis_event *event);
 
@@ -2039,10 +2055,6 @@ static struct wlr_buffer *nide_cairo_buffer_create(
 	return &buffer->base;
 }
 
-static const float launcher_dim_color[4] = {
-	0.0f, 0.0f, 0.0f, 0.55f,
-};
-
 static const uint32_t launcher_palette[] = {
 	0x4f7cff, 0xe5484d, 0x30a46c, 0xf5a524,
 	0x9a5cf5, 0x00a2c7, 0xe05a9a, 0x6b7f99,
@@ -2212,6 +2224,100 @@ static void launcher_unescape(char *text) {
 	*out = '\0';
 }
 
+static bool launcher_icon_filename(const char *name, char *out, size_t outsz) {
+	size_t len = strlen(name);
+	if (len == 0) {
+		return false;
+	}
+	if (len >= 4 && strcasecmp(name + len - 4, ".png") == 0) {
+		snprintf(out, outsz, "%s", name);
+		return true;
+	}
+	if ((len >= 4 && (strcasecmp(name + len - 4, ".svg") == 0 ||
+			strcasecmp(name + len - 4, ".xpm") == 0)) ||
+			(len >= 5 && strcasecmp(name + len - 5, ".svgz") == 0)) {
+		return false;
+	}
+	int written = snprintf(out, outsz, "%s.png", name);
+	return written > 0 && (size_t)written < outsz;
+}
+
+static bool launcher_icon_in_root(const char *root, const char *file,
+		char *out, size_t outsz) {
+	static const char *sizes[] = {
+		"128x128", "256x256", "96x96", "64x64",
+		"48x48", "192x192", "32x32", "16x16",
+	};
+	static const char *themes[] = {
+		"icons/hicolor",
+		"icons/oxygen/base",
+	};
+
+	for (size_t t = 0; t < sizeof(themes) / sizeof(themes[0]); t++) {
+		for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+			int written = snprintf(out, outsz, "%s/%s/%s/apps/%s",
+				root, themes[t], sizes[i], file);
+			if (written > 0 && (size_t)written < outsz &&
+					access(out, R_OK) == 0) {
+				return true;
+			}
+		}
+	}
+
+	int written = snprintf(out, outsz, "%s/pixmaps/%s", root, file);
+	if (written > 0 && (size_t)written < outsz &&
+			access(out, R_OK) == 0) {
+		return true;
+	}
+	return false;
+}
+
+static bool launcher_resolve_icon(const char *name, char *out, size_t outsz) {
+	char file[512];
+	if (!launcher_icon_filename(name, file, sizeof(file))) {
+		return false;
+	}
+
+	if (strchr(file, '/') != NULL) {
+		if (access(file, R_OK) != 0) {
+			return false;
+		}
+		snprintf(out, outsz, "%s", file);
+		return true;
+	}
+
+	const char *data_home = getenv("XDG_DATA_HOME");
+	const char *home = getenv("HOME");
+	char root[PATH_MAX];
+	if (data_home != NULL && *data_home != '\0') {
+		snprintf(root, sizeof(root), "%s", data_home);
+		if (launcher_icon_in_root(root, file, out, outsz)) {
+			return true;
+		}
+	} else if (home != NULL && *home != '\0') {
+		snprintf(root, sizeof(root), "%s/.local/share", home);
+		if (launcher_icon_in_root(root, file, out, outsz)) {
+			return true;
+		}
+	}
+
+	const char *data_dirs = getenv("XDG_DATA_DIRS");
+	if (data_dirs == NULL || *data_dirs == '\0') {
+		data_dirs = "/usr/local/share:/usr/share";
+	}
+	char dirs[8192];
+	snprintf(dirs, sizeof(dirs), "%s", data_dirs);
+
+	char *saveptr = NULL;
+	for (char *dir = strtok_r(dirs, ":", &saveptr); dir != NULL;
+			dir = strtok_r(NULL, ":", &saveptr)) {
+		if (launcher_icon_in_root(dir, file, out, outsz)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static bool launcher_has_app_id(struct nide_server *server, const char *id) {
 	struct nide_launcher *launcher = &server->launcher;
 	for (int i = 0; i < launcher->napps; i++) {
@@ -2223,7 +2329,8 @@ static bool launcher_has_app_id(struct nide_server *server, const char *id) {
 }
 
 static void launcher_add_app(struct nide_server *server, const char *name,
-		const char *exec, const char *id, bool terminal) {
+		const char *exec, const char *id, bool terminal,
+		const char *icon) {
 	struct nide_launcher *launcher = &server->launcher;
 	if (launcher_has_app_id(server, id)) {
 		return;
@@ -2245,6 +2352,8 @@ static void launcher_add_app(struct nide_server *server, const char *name,
 	snprintf(app->name, sizeof(app->name), "%s", name);
 	snprintf(app->exec, sizeof(app->exec), "%s", exec);
 	snprintf(app->id, sizeof(app->id), "%s", id);
+	snprintf(app->icon, sizeof(app->icon), "%s",
+		icon != NULL ? icon : "");
 	app->terminal = terminal;
 }
 
@@ -2258,6 +2367,7 @@ static void launcher_read_desktop(struct nide_server *server,
 	char name[128] = {0};
 	char exec[512] = {0};
 	char type[32] = {0};
+	char icon[256] = {0};
 	bool in_entry = false;
 	bool terminal = false;
 	bool hidden = false;
@@ -2293,6 +2403,8 @@ static void launcher_read_desktop(struct nide_server *server,
 			snprintf(exec, sizeof(exec), "%s", value);
 		} else if (strcmp(line, "Type") == 0 && type[0] == '\0') {
 			snprintf(type, sizeof(type), "%s", value);
+		} else if (strcmp(line, "Icon") == 0 && icon[0] == '\0') {
+			snprintf(icon, sizeof(icon), "%s", value);
 		} else if (strcmp(line, "Terminal") == 0) {
 			terminal = strcasecmp(value, "true") == 0;
 		} else if (strcmp(line, "NoDisplay") == 0) {
@@ -2313,10 +2425,16 @@ static void launcher_read_desktop(struct nide_server *server,
 
 	launcher_unescape(name);
 	launcher_unescape(exec);
+	launcher_unescape(icon);
 	if (name[0] == '\0' || exec[0] == '\0') {
 		return;
 	}
-	launcher_add_app(server, name, exec, id, terminal);
+
+	char icon_path[512] = {0};
+	if (icon[0] != '\0') {
+		launcher_resolve_icon(icon, icon_path, sizeof(icon_path));
+	}
+	launcher_add_app(server, name, exec, id, terminal, icon_path);
 }
 
 static void launcher_scan_dir(struct nide_server *server, const char *dir) {
@@ -2450,24 +2568,6 @@ static int launcher_count_app(struct nide_server *server,
 	return count;
 }
 
-static int launcher_count_app_id(struct nide_server *server,
-		const char *app_id) {
-	if (app_id == NULL || *app_id == '\0') {
-		return 1;
-	}
-
-	int count = 0;
-	struct nide_toplevel *toplevel;
-	wl_list_for_each(toplevel, &server->toplevels, link) {
-		const char *other = toplevel->xdg_toplevel->app_id;
-		if (toplevel->mapped && other != NULL &&
-				strcasecmp(other, app_id) == 0) {
-			count++;
-		}
-	}
-	return count > 0 ? count : 1;
-}
-
 static void launcher_friendly_name(const char *app_id,
 		char *out, size_t outsz) {
 	const char *base = app_id;
@@ -2514,7 +2614,7 @@ static void launcher_reserve_items(struct nide_server *server, int count) {
 
 static void launcher_add_item(struct nide_server *server,
 		const char *name, const char *detail, const char *exec,
-		const char *app_id, int count, bool terminal,
+		const char *app_id, const char *icon, int count, bool terminal,
 		struct nide_toplevel *toplevel) {
 	struct nide_launcher *launcher = &server->launcher;
 	launcher_reserve_items(server, launcher->nitems + 1);
@@ -2531,6 +2631,8 @@ static void launcher_add_item(struct nide_server *server,
 		exec != NULL ? exec : "");
 	snprintf(item->app_id, sizeof(item->app_id), "%s",
 		app_id != NULL ? app_id : "");
+	snprintf(item->icon, sizeof(item->icon), "%s",
+		icon != NULL ? icon : "");
 	item->count = count;
 	item->terminal = terminal;
 	item->toplevel = toplevel;
@@ -2566,21 +2668,75 @@ static void launcher_filter(struct nide_server *server) {
 		}
 	}
 
-	launcher->page = 0;
+	launcher->scroll = 0;
 	launcher->selected = 0;
+}
+
+static int launcher_total_rows(struct nide_server *server) {
+	struct nide_launcher *launcher = &server->launcher;
+	return (launcher->nfiltered + NIDE_LAUNCHER_COLS - 1) /
+		NIDE_LAUNCHER_COLS;
+}
+
+static int launcher_max_scroll(struct nide_server *server) {
+	int rows = launcher_total_rows(server);
+	int max_scroll = rows - NIDE_LAUNCHER_ROWS;
+	return max_scroll > 0 ? max_scroll : 0;
+}
+
+static void launcher_clamp_scroll(struct nide_server *server) {
+	struct nide_launcher *launcher = &server->launcher;
+	launcher->scroll = launcher_clamp_int(launcher->scroll, 0,
+		launcher_max_scroll(server));
+}
+
+static void launcher_ensure_selected_visible(struct nide_server *server) {
+	struct nide_launcher *launcher = &server->launcher;
+	if (launcher->nfiltered <= 0) {
+		launcher->scroll = 0;
+		return;
+	}
+
+	int row = launcher->selected / NIDE_LAUNCHER_COLS;
+	if (row < launcher->scroll) {
+		launcher->scroll = row;
+	} else if (row >= launcher->scroll + NIDE_LAUNCHER_ROWS) {
+		launcher->scroll = row - NIDE_LAUNCHER_ROWS + 1;
+	}
+	launcher_clamp_scroll(server);
+}
+
+static void launcher_keep_selection_visible(struct nide_server *server) {
+	struct nide_launcher *launcher = &server->launcher;
+	if (launcher->nfiltered <= 0) {
+		launcher->selected = 0;
+		launcher->scroll = 0;
+		return;
+	}
+
+	int first = launcher->scroll * NIDE_LAUNCHER_COLS;
+	int last = first + NIDE_LAUNCHER_PAGE_SIZE - 1;
+	if (last >= launcher->nfiltered) {
+		last = launcher->nfiltered - 1;
+	}
+	if (launcher->selected < first) {
+		launcher->selected = first;
+	} else if (launcher->selected > last) {
+		launcher->selected = last;
+	}
 }
 
 static void launcher_select(struct nide_server *server, int index) {
 	struct nide_launcher *launcher = &server->launcher;
 	if (launcher->nfiltered <= 0) {
 		launcher->selected = 0;
-		launcher->page = 0;
+		launcher->scroll = 0;
 		return;
 	}
 
 	index = launcher_clamp_int(index, 0, launcher->nfiltered - 1);
 	launcher->selected = index;
-	launcher->page = index / NIDE_LAUNCHER_PAGE_SIZE;
+	launcher_ensure_selected_visible(server);
 }
 
 static void launcher_move_selection(struct nide_server *server,
@@ -2610,20 +2766,38 @@ static void launcher_move_selection(struct nide_server *server,
 	}
 }
 
-static void launcher_set_page(struct nide_server *server, int delta) {
+static void launcher_scroll_to(struct nide_server *server, int row) {
 	struct nide_launcher *launcher = &server->launcher;
 	if (launcher->nfiltered <= 0) {
 		return;
 	}
 
-	int pages = (launcher->nfiltered + NIDE_LAUNCHER_PAGE_SIZE - 1) /
-		NIDE_LAUNCHER_PAGE_SIZE;
-	launcher->page = launcher_clamp_int(launcher->page + delta,
-		0, pages - 1);
-	launcher->selected = launcher_clamp_int(
-		launcher->page * NIDE_LAUNCHER_PAGE_SIZE,
-		0, launcher->nfiltered - 1);
+	launcher->scroll = row;
+	launcher_clamp_scroll(server);
+	launcher_keep_selection_visible(server);
 	launcher_render(server);
+}
+
+static void launcher_scroll_by(struct nide_server *server, int delta) {
+	struct nide_launcher *launcher = &server->launcher;
+	if (launcher->nfiltered <= 0 || delta == 0) {
+		return;
+	}
+	launcher_scroll_to(server, launcher->scroll + delta);
+}
+
+static int launcher_item_compare(const void *left, const void *right) {
+	const struct nide_launcher_item *a = left;
+	const struct nide_launcher_item *b = right;
+	int compare = strcasecmp(a->name, b->name);
+	if (compare != 0) {
+		return compare;
+	}
+	compare = strcasecmp(a->detail, b->detail);
+	if (compare != 0) {
+		return compare;
+	}
+	return strcasecmp(a->app_id, b->app_id);
 }
 
 static void launcher_build_items(struct nide_server *server) {
@@ -2656,19 +2830,21 @@ static void launcher_build_items(struct nide_server *server) {
 			launcher_add_item(server, name,
 				title != NULL ? title : "Untitled window",
 				NULL, app_id,
-				launcher_count_app_id(server, app_id),
-				false, toplevel);
+				app != NULL ? app->icon : NULL,
+				0, false, toplevel);
 		}
 	} else {
 		for (int i = 0; i < launcher->napps; i++) {
 			struct nide_app *app = &launcher->apps[i];
 			launcher_add_item(server, app->name, "",
-				app->exec, app->id,
+				app->exec, app->id, app->icon,
 				launcher_count_app(server, app->id),
 				app->terminal, NULL);
 		}
 	}
 
+	qsort(launcher->items, (size_t)launcher->nitems,
+		sizeof(*launcher->items), launcher_item_compare);
 	launcher_filter(server);
 }
 
@@ -2680,8 +2856,9 @@ static void launcher_set_mode(struct nide_server *server,
 	}
 
 	launcher->mode = mode;
-	launcher->page = 0;
+	launcher->scroll = 0;
 	launcher->selected = 0;
+	launcher->scrollbar_dragging = false;
 	launcher_build_items(server);
 	launcher_render(server);
 }
@@ -2722,8 +2899,8 @@ static void launcher_layout(struct nide_server *server) {
 	launcher->output = output;
 
 	int panel_width = output.width - 64;
-	if (panel_width > 860) {
-		panel_width = 860;
+	if (panel_width > 760) {
+		panel_width = 760;
 	}
 	if (panel_width < 300) {
 		panel_width = output.width - 16;
@@ -2731,8 +2908,8 @@ static void launcher_layout(struct nide_server *server) {
 	panel_width = launcher_clamp_int(panel_width, 1, output.width);
 
 	int panel_height = output.height - 64;
-	if (panel_height > 620) {
-		panel_height = 620;
+	if (panel_height > 540) {
+		panel_height = 540;
 	}
 	if (panel_height < 260) {
 		panel_height = output.height - 16;
@@ -2748,7 +2925,7 @@ static void launcher_layout(struct nide_server *server) {
 
 	int pad = panel_width < 560 ? 14 : 24;
 	int search_height = panel_height < 420 ? 40 : 52;
-	int tabs_width = panel_width < 640 ? 176 : 300;
+	int tabs_width = panel_width < 640 ? 176 : 290;
 	if (panel_width < 420) {
 		tabs_width = 150;
 	}
@@ -2773,17 +2950,27 @@ static void launcher_layout(struct nide_server *server) {
 	};
 
 	int grid_top = pad + search_height +
-		(panel_height < 420 ? 12 : 20);
-	int footer_height = panel_height < 420 ? 36 : 46;
-	int grid_height = panel_height - grid_top - footer_height - pad;
-	grid_height = launcher_clamp_int(grid_height, 40,
-		panel_height - grid_top);
+		(panel_height < 420 ? 12 : 22);
+	int grid_height = panel_height - grid_top - pad;
+	if (grid_height < 40) {
+		grid_height = 40;
+	}
+	int grid_limit = panel_height - grid_top - 8;
+	if (grid_limit < 1) {
+		grid_limit = 1;
+	}
+	if (grid_height > grid_limit) {
+		grid_height = grid_limit;
+	}
 	int gap = panel_width < 600 ? 8 : 12;
+	int grid_width = panel_width - pad * 2 - 22;
+	if (grid_width < 1) {
+		grid_width = 1;
+	}
 
 	launcher->grid = (struct wlr_box) {
 		.x = pad, .y = grid_top,
-		.width = panel_width - pad * 2,
-		.height = grid_height,
+		.width = grid_width, .height = grid_height,
 	};
 	launcher->gap = gap;
 	launcher->tile_w = (launcher->grid.width -
@@ -2797,18 +2984,116 @@ static void launcher_layout(struct nide_server *server) {
 		launcher->tile_h = 1;
 	}
 
-	int footer_y = panel_height - footer_height + 8;
-	launcher->prev = (struct wlr_box) {
-		.x = panel_width / 2 - 74, .y = footer_y,
-		.width = 28, .height = 28,
+	int icon_size = launcher->tile_w - 20;
+	if (icon_size > launcher->tile_h - 36) {
+		icon_size = launcher->tile_h - 36;
+	}
+	if (icon_size > 76) {
+		icon_size = 76;
+	}
+	if (icon_size < 24) {
+		icon_size = 24;
+	}
+	launcher->icon_size = icon_size;
+
+	int scrollbar_x = panel_width - pad - 14;
+	launcher->scrollbar = (struct wlr_box) {
+		.x = scrollbar_x, .y = grid_top,
+		.width = 14, .height = grid_height,
 	};
-	launcher->next = (struct wlr_box) {
-		.x = panel_width / 2 + 46, .y = footer_y,
-		.width = 28, .height = 28,
+	launcher->scroll_track = (struct wlr_box) {
+		.x = launcher->scrollbar.x + 5, .y = grid_top,
+		.width = 4, .height = grid_height,
 	};
 }
 
-static void launcher_draw_tile(cairo_t *cr, struct nide_server *server,
+static void launcher_free_icons(struct nide_server *server) {
+	struct nide_launcher *launcher = &server->launcher;
+	for (int i = 0; i < launcher->nicons; i++) {
+		if (launcher->icons[i].surface != NULL) {
+			cairo_surface_destroy(launcher->icons[i].surface);
+		}
+		launcher->icons[i].surface = NULL;
+	}
+	launcher->nicons = 0;
+	launcher->icon_tick = 0;
+}
+
+static cairo_surface_t *launcher_icon_cache_get(struct nide_server *server,
+		const char *path) {
+	struct nide_launcher *launcher = &server->launcher;
+	if (path == NULL || *path == '\0') {
+		return NULL;
+	}
+
+	for (int i = 0; i < launcher->nicons; i++) {
+		if (strcmp(launcher->icons[i].path, path) == 0) {
+			launcher->icons[i].used = ++launcher->icon_tick;
+			return launcher->icons[i].surface;
+		}
+	}
+
+	cairo_surface_t *surface = cairo_image_surface_create_from_png(path);
+	if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+		cairo_surface_destroy(surface);
+		surface = NULL;
+	}
+
+	int slot = -1;
+	if (launcher->nicons < NIDE_LAUNCHER_ICON_CACHE) {
+		slot = launcher->nicons++;
+	} else {
+		slot = 0;
+		for (int i = 1; i < launcher->nicons; i++) {
+			if (launcher->icons[i].used <
+					launcher->icons[slot].used) {
+				slot = i;
+			}
+		}
+		if (launcher->icons[slot].surface != NULL) {
+			cairo_surface_destroy(launcher->icons[slot].surface);
+		}
+	}
+
+	struct nide_launcher_icon *entry = &launcher->icons[slot];
+	snprintf(entry->path, sizeof(entry->path), "%s", path);
+	entry->surface = surface;
+	entry->used = ++launcher->icon_tick;
+	return surface;
+}
+
+static bool launcher_scrollbar_thumb(struct nide_server *server,
+		struct wlr_box *thumb) {
+	struct nide_launcher *launcher = &server->launcher;
+	int rows = launcher_total_rows(server);
+	if (rows <= NIDE_LAUNCHER_ROWS) {
+		thumb->width = 0;
+		thumb->height = 0;
+		return false;
+	}
+
+	struct wlr_box track = launcher->scroll_track;
+	int height = (int)((double)track.height *
+		NIDE_LAUNCHER_ROWS / rows);
+	if (height < 28) {
+		height = 28;
+	}
+	if (height > track.height) {
+		height = track.height;
+	}
+	int max_scroll = launcher_max_scroll(server);
+	double position = max_scroll > 0 ?
+		(double)launcher->scroll / max_scroll : 0.0;
+
+	*thumb = (struct wlr_box) {
+		.x = track.x, .y = track.y +
+			(int)((track.height - height) * position),
+		.width = track.width, .height = height,
+	};
+	return true;
+}
+
+static void launcher_draw_item(cairo_t *cr, struct nide_server *server,
 		struct nide_launcher_item *item, int slot, bool selected) {
 	struct nide_launcher *launcher = &server->launcher;
 	int column = slot % NIDE_LAUNCHER_COLS;
@@ -2818,63 +3103,92 @@ static void launcher_draw_tile(cairo_t *cr, struct nide_server *server,
 	double y = launcher->grid.y +
 		row * (launcher->tile_h + launcher->gap);
 	double width = launcher->tile_w;
-	double height = launcher->tile_h;
+	double icon_size = launcher->icon_size;
+	double icon_x = x + (width - icon_size) / 2.0;
+	double icon_y = y + 8;
+	double icon_cx = icon_x + icon_size / 2.0;
+	double icon_cy = icon_y + icon_size / 2.0;
 
-	launcher_rounded_rect(cr, x, y, width, height, 14);
-	if (item == NULL) {
-		launcher_set_color(cr, 0x182331, 0.35);
+	if (selected) {
+		cairo_pattern_t *glow = cairo_pattern_create_radial(
+			icon_cx, icon_cy, icon_size * 0.24,
+			icon_cx, icon_cy, icon_size * 0.86);
+		cairo_pattern_add_color_stop_rgba(glow, 0.0,
+			0.42, 0.55, 1.0, 0.30);
+		cairo_pattern_add_color_stop_rgba(glow, 1.0,
+			0.42, 0.55, 1.0, 0.0);
+		cairo_set_source(cr, glow);
+		cairo_new_sub_path(cr);
+		cairo_arc(cr, icon_cx, icon_cy, icon_size * 0.86,
+			0, 2 * M_PI);
+		cairo_fill(cr);
+		cairo_pattern_destroy(glow);
+	}
+
+	cairo_surface_t *surface =
+		launcher_icon_cache_get(server, item->icon);
+	cairo_text_extents_t extents;
+	if (surface != NULL) {
+		int source_width = cairo_image_surface_get_width(surface);
+		int source_height = cairo_image_surface_get_height(surface);
+		int source_max = source_width > source_height ?
+			source_width : source_height;
+		if (source_max > 0) {
+			double scale = icon_size / (double)source_max;
+			double draw_width = source_width * scale;
+			double draw_height = source_height * scale;
+			cairo_save(cr);
+			cairo_translate(cr, icon_cx - draw_width / 2.0,
+				icon_cy - draw_height / 2.0);
+			cairo_scale(cr, scale, scale);
+			cairo_set_source_surface(cr, surface, 0, 0);
+			cairo_pattern_set_filter(cairo_get_source(cr),
+				CAIRO_FILTER_GOOD);
+			cairo_paint(cr);
+			cairo_restore(cr);
+		}
+	} else {
+		cairo_new_sub_path(cr);
+		cairo_arc(cr, icon_cx, icon_cy, icon_size / 2.0,
+			0, 2 * M_PI);
+		launcher_set_color(cr, launcher_color_for_text(item->name),
+			0.92);
+		cairo_fill(cr);
+
+		char initials[3];
+		launcher_initials(item->name, initials);
+		launcher_set_font(cr, icon_size * 0.32, true);
+		launcher_set_color(cr, 0xffffff, 0.96);
+		cairo_text_extents(cr, initials, &extents);
+		cairo_move_to(cr,
+			icon_cx - extents.x_advance / 2.0,
+			icon_cy - extents.height / 2.0 -
+				extents.y_bearing);
+		cairo_show_text(cr, initials);
+	}
+
+	if (launcher->mode == NIDE_LAUNCHER_APPS && item->count == 1) {
+		double dot_x = icon_x + icon_size - 3;
+		double dot_y = icon_y + 3;
+		cairo_new_sub_path(cr);
+		cairo_arc(cr, dot_x, dot_y, 5.0, 0, 2 * M_PI);
+		launcher_set_color(cr, 0x0b1220, 0.85);
+		cairo_fill(cr);
+		cairo_new_sub_path(cr);
+		cairo_arc(cr, dot_x, dot_y, 3.2, 0, 2 * M_PI);
+		launcher_set_color(cr, 0x6c8fff, 0.95);
+		cairo_fill(cr);
+	} else if (launcher->mode == NIDE_LAUNCHER_APPS && item->count > 1) {
+		double badge_x = icon_x + icon_size - 3;
+		double badge_y = icon_y + 3;
+		double badge_radius = item->count > 99 ? 11.0 : 9.0;
+		cairo_new_sub_path(cr);
+		cairo_arc(cr, badge_x, badge_y, badge_radius, 0, 2 * M_PI);
+		launcher_set_color(cr, 0x0b1220, 0.92);
 		cairo_fill_preserve(cr);
-		launcher_set_color(cr, 0x243247, 0.55);
+		launcher_set_color(cr, 0x6c8fff, 0.85);
 		cairo_set_line_width(cr, 1.0);
 		cairo_stroke(cr);
-		return;
-	}
-
-	launcher_set_color(cr, selected ? 0x1a2c49 : 0x141e2c,
-		selected ? 0.98 : 0.94);
-	cairo_fill_preserve(cr);
-	launcher_set_color(cr, selected ? 0x4f7cff : 0x26364b,
-		selected ? 0.95 : 0.8);
-	cairo_set_line_width(cr, selected ? 2.4 : 1.0);
-	cairo_stroke(cr);
-
-	double icon_size = width - 36;
-	if (icon_size > height - 46) {
-		icon_size = height - 46;
-	}
-	if (icon_size > 64) {
-		icon_size = 64;
-	}
-	if (icon_size < 24) {
-		icon_size = 24;
-	}
-	double icon_x = x + (width - icon_size) / 2.0;
-	double icon_y = y + 10;
-
-	launcher_rounded_rect(cr, icon_x, icon_y, icon_size, icon_size, 15);
-	uint32_t color = launcher_color_for_text(item->name);
-	launcher_set_color(cr, color, 1.0);
-	cairo_fill(cr);
-
-	char initials[3];
-	launcher_initials(item->name, initials);
-	launcher_set_font(cr, icon_size * 0.34, true);
-	launcher_set_color(cr, 0xffffff, 0.96);
-	cairo_text_extents_t extents;
-	cairo_text_extents(cr, initials, &extents);
-	cairo_move_to(cr,
-		icon_x + (icon_size - extents.x_advance) / 2.0,
-		icon_y + (icon_size - extents.height) / 2.0 -
-			extents.y_bearing);
-	cairo_show_text(cr, initials);
-
-	if (item->count > 0) {
-		double badge_x = icon_x + 4;
-		double badge_y = icon_y + 4;
-		double badge_radius = 10;
-		cairo_arc(cr, badge_x, badge_y, badge_radius, 0, 2 * M_PI);
-		launcher_set_color(cr, 0xe5484d, 1.0);
-		cairo_fill(cr);
 
 		char count_text[16];
 		if (item->count > 99) {
@@ -2883,23 +3197,19 @@ static void launcher_draw_tile(cairo_t *cr, struct nide_server *server,
 			snprintf(count_text, sizeof(count_text), "%d",
 				item->count);
 		}
-		launcher_set_font(cr, 10, true);
+		launcher_set_font(cr, item->count > 99 ? 8 : 9, true);
 		cairo_text_extents(cr, count_text, &extents);
-		launcher_set_color(cr, 0xffffff, 1.0);
+		launcher_set_color(cr, 0xffffff, 0.98);
 		cairo_move_to(cr, badge_x - extents.x_advance / 2.0,
 			badge_y - extents.height / 2.0 - extents.y_bearing);
 		cairo_show_text(cr, count_text);
 	}
 
 	double name_y = icon_y + icon_size + 17;
-	launcher_draw_text(cr, item->name, x + 6, name_y,
-		width - 12, 12, true, 1, 0xe8eef8, 0.98);
-
-	if (launcher->mode == NIDE_LAUNCHER_WINDOWS &&
-			item->detail[0] != '\0') {
-		launcher_draw_text(cr, item->detail, x + 6, name_y + 14,
-			width - 12, 10, false, 1, 0x93a3ba, 0.95);
-	}
+	launcher_draw_text(cr, item->name, x + 4, name_y,
+		width - 8, 12, false, 1,
+		selected ? 0xffffff : 0xd6e0ee,
+		selected ? 0.98 : 0.82);
 }
 
 static void launcher_render(struct nide_server *server) {
@@ -2931,26 +3241,33 @@ static void launcher_render(struct nide_server *server) {
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
 	launcher_rounded_rect(cr, 0, 0, width, height, 18);
-	launcher_set_color(cr, 0x0c141f, 0.985);
+	cairo_pattern_t *panel_gradient =
+		cairo_pattern_create_linear(0, 0, 0, height);
+	cairo_pattern_add_color_stop_rgba(panel_gradient, 0.0,
+		0.12, 0.17, 0.26, 0.91);
+	cairo_pattern_add_color_stop_rgba(panel_gradient, 1.0,
+		0.04, 0.07, 0.12, 0.87);
+	cairo_set_source(cr, panel_gradient);
 	cairo_fill_preserve(cr);
-	launcher_set_color(cr, 0x2b3b52, 0.95);
+	cairo_pattern_destroy(panel_gradient);
+	launcher_set_color(cr, 0xffffff, 0.14);
 	cairo_set_line_width(cr, 1.2);
 	cairo_stroke(cr);
 
-	double pad = launcher->search.x;
 	launcher_rounded_rect(cr, launcher->search.x, launcher->search.y,
 		launcher->search.width, launcher->search.height, 14);
-	launcher_set_color(cr, 0x0a111b, 0.96);
+	launcher_set_color(cr, 0xffffff, 0.06);
 	cairo_fill_preserve(cr);
-	launcher_set_color(cr, 0x263750, 0.95);
+	launcher_set_color(cr, 0xffffff, 0.12);
 	cairo_set_line_width(cr, 1.0);
 	cairo_stroke(cr);
 
 	double search_center_y =
 		launcher->search.y + launcher->search.height / 2.0;
+	cairo_new_sub_path(cr);
 	cairo_arc(cr, launcher->search.x + 21, search_center_y, 6.5,
 		-M_PI / 2.0, 2 * M_PI);
-	launcher_set_color(cr, 0x7c8ba3, 0.95);
+	launcher_set_color(cr, 0xc3cfe0, 0.72);
 	cairo_set_line_width(cr, 1.8);
 	cairo_stroke(cr);
 	cairo_move_to(cr, launcher->search.x + 26,
@@ -2966,7 +3283,8 @@ static void launcher_render(struct nide_server *server) {
 		has_query ? launcher->query : "Search apps or windows",
 		text_x, text_baseline,
 		launcher->search.width - 56, 15, false, 0,
-		has_query ? 0xdce7f5 : 0x6f7f95, 0.98);
+		has_query ? 0xf1f6ff : 0xc3cfe0,
+		has_query ? 0.96 : 0.48);
 
 	launcher_set_font(cr, 15, false);
 	cairo_text_extents_t query_extents;
@@ -2977,7 +3295,7 @@ static void launcher_render(struct nide_server *server) {
 	}
 	cairo_move_to(cr, caret_x, text_baseline - 13);
 	cairo_line_to(cr, caret_x, text_baseline + 4);
-	launcher_set_color(cr, 0x4f7cff, 0.95);
+	launcher_set_color(cr, 0x6c8fff, 0.95);
 	cairo_set_line_width(cr, 1.5);
 	cairo_stroke(cr);
 
@@ -2988,10 +3306,10 @@ static void launcher_render(struct nide_server *server) {
 		struct wlr_box tab = launcher->tabs[i];
 		launcher_rounded_rect(cr, tab.x, tab.y, tab.width, tab.height,
 			tab.height / 2.0);
-		launcher_set_color(cr, active ? 0x365fd6 : 0x141e2d,
-			active ? 0.97 : 0.9);
+		launcher_set_color(cr, active ? 0x4f7cff : 0xffffff,
+			active ? 0.52 : 0.05);
 		cairo_fill_preserve(cr);
-		launcher_set_color(cr, active ? 0x7599ff : 0x26364b, 0.9);
+		launcher_set_color(cr, 0xffffff, active ? 0.24 : 0.09);
 		cairo_set_line_width(cr, 1.0);
 		cairo_stroke(cr);
 
@@ -2999,19 +3317,19 @@ static void launcher_render(struct nide_server *server) {
 		launcher_draw_text(cr, label, tab.x + 6,
 			tab.y + tab.height / 2.0 + 4,
 			tab.width - 12, 11, true, 1,
-			active ? 0xffffff : 0xaebbd0, 0.98);
+			active ? 0xffffff : 0xc2cee0,
+			active ? 0.98 : 0.82);
 	}
 
-	int page_start = launcher->page * NIDE_LAUNCHER_PAGE_SIZE;
+	int first_index = launcher->scroll * NIDE_LAUNCHER_COLS;
 	for (int slot = 0; slot < NIDE_LAUNCHER_PAGE_SIZE; slot++) {
-		int index = page_start + slot;
-		struct nide_launcher_item *item = NULL;
-		if (index < launcher->nfiltered) {
-			item = &launcher->items[
-				launcher->filtered[index]];
+		int index = first_index + slot;
+		if (index >= launcher->nfiltered) {
+			break;
 		}
-		launcher_draw_tile(cr, server, item, slot,
-			index < launcher->nfiltered &&
+		struct nide_launcher_item *item =
+			&launcher->items[launcher->filtered[index]];
+		launcher_draw_item(cr, server, item, slot,
 			index == launcher->selected);
 	}
 
@@ -3019,66 +3337,24 @@ static void launcher_render(struct nide_server *server) {
 		launcher_draw_text(cr, "No apps or windows found",
 			launcher->grid.x, launcher->grid.y +
 				launcher->grid.height / 2.0 + 5,
-			launcher->grid.width, 16, true, 1,
-			0x8a9bb2, 0.95);
+			launcher->grid.width, 16, false, 1,
+			0xc3cfe0, 0.62);
 	}
 
-	int pages = (launcher->nfiltered + NIDE_LAUNCHER_PAGE_SIZE - 1) /
-		NIDE_LAUNCHER_PAGE_SIZE;
-	if (pages > 1) {
-		double arrow_y = launcher->prev.y +
-			launcher->prev.height / 2.0;
-		if (launcher->page > 0) {
-			launcher_set_color(cr, 0xaebbd0, 0.95);
-		} else {
-			launcher_set_color(cr, 0x3a4658, 0.7);
-		}
-		cairo_set_line_width(cr, 2.0);
-		cairo_move_to(cr, launcher->prev.x + 18,
-			arrow_y - 7);
-		cairo_line_to(cr, launcher->prev.x + 11,
-			arrow_y);
-		cairo_line_to(cr, launcher->prev.x + 18,
-			arrow_y + 7);
-		cairo_stroke(cr);
+	struct wlr_box thumb;
+	if (launcher_scrollbar_thumb(server, &thumb)) {
+		launcher_rounded_rect(cr, launcher->scroll_track.x,
+			launcher->scroll_track.y,
+			launcher->scroll_track.width,
+			launcher->scroll_track.height,
+			launcher->scroll_track.width / 2.0);
+		launcher_set_color(cr, 0xffffff, 0.07);
+		cairo_fill(cr);
 
-		if (launcher->page + 1 < pages) {
-			launcher_set_color(cr, 0xaebbd0, 0.95);
-		} else {
-			launcher_set_color(cr, 0x3a4658, 0.7);
-		}
-		cairo_move_to(cr, launcher->next.x + 10,
-			arrow_y - 7);
-		cairo_line_to(cr, launcher->next.x + 17,
-			arrow_y);
-		cairo_line_to(cr, launcher->next.x + 10,
-			arrow_y + 7);
-		cairo_stroke(cr);
-
-		int visible_dots = pages < 9 ? pages : 9;
-		int first_dot = launcher->page - visible_dots / 2;
-		first_dot = launcher_clamp_int(first_dot, 0,
-			pages - visible_dots);
-		double dots_x = width / 2.0 -
-			(visible_dots - 1) * 6.0;
-		for (int i = 0; i < visible_dots; i++) {
-			int page = first_dot + i;
-			double dot_x = dots_x + i * 12.0;
-			cairo_arc(cr, dot_x, launcher->prev.y + 14,
-				page == launcher->page ? 4.2 : 2.6,
-				0, 2 * M_PI);
-			launcher_set_color(cr,
-				page == launcher->page ? 0x4f7cff : 0x52627a,
-				page == launcher->page ? 0.98 : 0.8);
-			cairo_fill(cr);
-		}
-	}
-
-	if (width > 680) {
-		launcher_draw_text(cr,
-			"Arrows move   Enter open   Tab switch   Esc close",
-			pad, height - 17, width - pad * 2, 10, false, 0,
-			0x6f7f95, 0.9);
+		launcher_rounded_rect(cr, thumb.x, thumb.y,
+			thumb.width, thumb.height, thumb.width / 2.0);
+		launcher_set_color(cr, 0xa9bcff, 0.58);
+		cairo_fill(cr);
 	}
 
 	cairo_destroy(cr);
@@ -3094,10 +3370,6 @@ static void launcher_render(struct nide_server *server) {
 
 	wlr_scene_node_set_position(&server->launcher_scene_buffer->node,
 		launcher->panel.x, launcher->panel.y);
-	wlr_scene_rect_set_size(server->launcher_dim,
-		launcher->output.width, launcher->output.height);
-	wlr_scene_node_set_position(&server->launcher_dim->node,
-		launcher->output.x, launcher->output.y);
 	wlr_scene_node_set_enabled(&server->launcher_tree->node, true);
 	wlr_scene_node_raise_to_top(&server->launcher_tree->node);
 }
@@ -3130,8 +3402,6 @@ static bool launcher_has_windows(struct nide_server *server) {
 
 static void launcher_init(struct nide_server *server) {
 	server->launcher_tree = wlr_scene_tree_create(&server->scene->tree);
-	server->launcher_dim = wlr_scene_rect_create(server->launcher_tree,
-		1, 1, launcher_dim_color);
 	server->launcher_scene_buffer = wlr_scene_buffer_create(
 		server->launcher_tree, NULL);
 	wlr_scene_node_set_enabled(&server->launcher_tree->node, false);
@@ -3147,8 +3417,9 @@ static void launcher_open(struct nide_server *server) {
 	launcher_load_apps(server);
 	launcher->open = true;
 	launcher->query[0] = '\0';
-	launcher->page = 0;
+	launcher->scroll = 0;
 	launcher->selected = 0;
+	launcher->scrollbar_dragging = false;
 	launcher->mode = launcher_has_windows(server) ?
 		NIDE_LAUNCHER_WINDOWS : NIDE_LAUNCHER_APPS;
 
@@ -3173,9 +3444,11 @@ static void launcher_close(struct nide_server *server) {
 	}
 
 	launcher->open = false;
+	launcher->scrollbar_dragging = false;
 	wlr_scene_node_set_enabled(&server->launcher_tree->node, false);
 	wlr_scene_buffer_set_buffer(server->launcher_scene_buffer, NULL);
 	launcher_free_items(server);
+	launcher_free_icons(server);
 
 	if (server->focused != NULL && server->focused->mapped) {
 		struct wlr_keyboard *keyboard =
@@ -3366,10 +3639,10 @@ static void launcher_handle_key(struct nide_server *server,
 		launcher_move_selection(server, 0, 1);
 		return;
 	case XKB_KEY_Page_Up:
-		launcher_set_page(server, -1);
+		launcher_scroll_by(server, -NIDE_LAUNCHER_ROWS);
 		return;
 	case XKB_KEY_Page_Down:
-		launcher_set_page(server, 1);
+		launcher_scroll_by(server, NIDE_LAUNCHER_ROWS);
 		return;
 	default:
 		break;
@@ -3415,8 +3688,8 @@ static int launcher_grid_index_at(struct nide_server *server,
 		return -1;
 	}
 
-	int index = launcher->page * NIDE_LAUNCHER_PAGE_SIZE +
-		row * NIDE_LAUNCHER_COLS + column;
+	int index = (launcher->scroll + row) * NIDE_LAUNCHER_COLS +
+		column;
 	if (index < 0 || index >= launcher->nfiltered) {
 		return -1;
 	}
@@ -3429,10 +3702,46 @@ static bool launcher_point_in_box(double x, double y,
 		x < box.x + box.width && y < box.y + box.height;
 }
 
+static int launcher_scrollbar_position(struct nide_server *server,
+		double y, double grab) {
+	struct nide_launcher *launcher = &server->launcher;
+	struct wlr_box thumb;
+	if (!launcher_scrollbar_thumb(server, &thumb)) {
+		return launcher->scroll;
+	}
+
+	double usable = launcher->scroll_track.height - thumb.height;
+	if (usable <= 0) {
+		return 0;
+	}
+
+	double offset = y - launcher->scroll_track.y - grab;
+	double progress = offset / usable;
+	if (progress < 0.0) {
+		progress = 0.0;
+	} else if (progress > 1.0) {
+		progress = 1.0;
+	}
+
+	int max_scroll = launcher_max_scroll(server);
+	return (int)lround(progress * max_scroll);
+}
+
 static void launcher_handle_motion(struct nide_server *server) {
 	struct nide_launcher *launcher = &server->launcher;
 	double local_x = server->cursor->x - launcher->panel.x;
 	double local_y = server->cursor->y - launcher->panel.y;
+
+	if (launcher->scrollbar_dragging) {
+		int row = launcher_scrollbar_position(server, local_y,
+			launcher->scrollbar_grab);
+		if (row != launcher->scroll) {
+			launcher_scroll_to(server, row);
+		}
+		wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr,
+			"default");
+		return;
+	}
 
 	int index = launcher_grid_index_at(server, local_x, local_y);
 	if (index >= 0 && index != launcher->selected) {
@@ -3447,9 +3756,10 @@ static void launcher_handle_motion(struct nide_server *server) {
 			clickable = true;
 		}
 	}
-	if (launcher_point_in_box(local_x, local_y, launcher->prev) ||
+	struct wlr_box thumb;
+	if (launcher_scrollbar_thumb(server, &thumb) &&
 			launcher_point_in_box(local_x, local_y,
-				launcher->next)) {
+				launcher->scrollbar)) {
 		clickable = true;
 	}
 
@@ -3484,12 +3794,19 @@ static void launcher_handle_click(struct nide_server *server,
 		}
 	}
 
-	if (launcher_point_in_box(local_x, local_y, launcher->prev)) {
-		launcher_set_page(server, -1);
-		return;
-	}
-	if (launcher_point_in_box(local_x, local_y, launcher->next)) {
-		launcher_set_page(server, 1);
+	struct wlr_box thumb;
+	if (launcher_scrollbar_thumb(server, &thumb) &&
+			launcher_point_in_box(local_x, local_y,
+				launcher->scrollbar)) {
+		launcher->scrollbar_dragging = true;
+		if (launcher_point_in_box(local_x, local_y, thumb)) {
+			launcher->scrollbar_grab = local_y - thumb.y;
+		} else {
+			launcher->scrollbar_grab = thumb.height / 2.0;
+			int row = launcher_scrollbar_position(server, local_y,
+				launcher->scrollbar_grab);
+			launcher_scroll_to(server, row);
+		}
 		return;
 	}
 
@@ -3500,12 +3817,17 @@ static void launcher_handle_click(struct nide_server *server,
 	}
 }
 
+static void launcher_handle_release(struct nide_server *server) {
+	server->launcher.scrollbar_dragging = false;
+}
+
 static void launcher_handle_axis(struct nide_server *server,
 		struct wlr_pointer_axis_event *event) {
-	if (event->orientation != WL_POINTER_AXIS_VERTICAL_SCROLL) {
+	if (event->orientation != WL_POINTER_AXIS_VERTICAL_SCROLL ||
+			event->delta == 0) {
 		return;
 	}
-	launcher_set_page(server, event->delta > 0 ? 1 : -1);
+	launcher_scroll_by(server, event->delta > 0 ? 1 : -1);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -3782,6 +4104,8 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 	if (server->launcher.open) {
 		if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
 			launcher_handle_click(server, event->button);
+		} else {
+			launcher_handle_release(server);
 		}
 		return;
 	}

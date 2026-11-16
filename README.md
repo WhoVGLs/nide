@@ -37,10 +37,11 @@ and the complete guide is in [`docs/manual.md`](docs/manual.md).
 - Hot reload: saving the config file updates bindings without a restart.
 - `Super+W` opens a terminal, `Super+C` closes the focused window.
 - `Super+Tab` opens the built-in launcher. It has two tabs: **Open Windows**
-  switches between running windows and shows how many windows each application
-  has open, while **All Apps** searches applications discovered from XDG
-  `.desktop` files. Results use a 5x3 tile grid with keyboard and mouse
-  navigation, search, and pagination.
+  switches between running windows, while **All Apps** searches applications
+  discovered from XDG `.desktop` files and marks ones that are already running.
+  Results are sorted alphabetically and shown as application logos with names in
+  a 5-column grid with a side scrollbar, keyboard and mouse navigation, and
+  search.
 - `Super+M` maximizes with a configurable margin; `Super+S` toggles fullscreen.
 - Edge snapping with a live preview: while moving a window, drag the pointer to
   the left or right screen edge to preview that half of the screen, or to the
@@ -202,21 +203,24 @@ once after creating a config.
 Press `Super+Tab` to open the launcher overlay. It opens in **Open Windows**
 mode when at least one window is running, otherwise in **All Apps** mode.
 
-- **Open Windows** lists each open window individually. The badge on each tile
-  shows how many windows that application has open. Selecting a tile raises
-  and focuses that window.
+- Both tabs show a 5-column grid of application logos and names, sorted
+  alphabetically. A scrollbar on the right side shows the current position;
+  click or drag it to scroll. The mouse wheel and `Page Up`/`Page Down` also
+  scroll.
+- **Open Windows** lists each open window individually. Selecting an entry
+  raises and focuses that window.
 - **All Apps** lists applications found in XDG application directories. It
   runs the application's `.desktop` `Exec` command, using `foot -e` when the
-  entry has `Terminal=true`. The badge shows how many windows are already open
-  for that application.
+  entry has `Terminal=true`. A small dot marks an application with one open
+  window; a numeric badge shows the count when it has more.
 - Type to search the current tab's names and window titles. Use the arrow keys
-  to move, `Enter` to open/focus, `Tab` to switch tabs, `Page Up`/`Page Down`
-  or the mouse wheel to change pages, and `Esc` or `Super+Tab` to close.
-- The launcher supports 15 tiles per page (5x3), page arrows, and pagination
-  dots. Clicking a tile or tab works as expected; clicking outside the panel
+  to move, `Enter` to open/focus, `Tab` to switch tabs, and `Esc` or
+  `Super+Tab` to close.
+- The panel uses a translucent glass look so the desktop remains visible
+  behind it. Applications are shown with their PNG icon from the `.desktop`
+  entry when one can be found; otherwise a colored initial is used.
+- Clicking an entry or tab works as expected; clicking outside the panel
   closes the launcher.
-- Application icons are generated from colored initials for now; icon files
-  from `.desktop` entries are not loaded yet.
 
 The action name is `launcher`, so it can be rebound:
 
@@ -253,7 +257,8 @@ Consequences:
   Use the launcher's **Open Windows** tab instead of a dock or taskbar.
 - No minimize, animations, shadows, or decorations.
 - No input method (IME) support.
-- Launcher icons are colored initials; application icon files are not read.
+- Launcher icons use PNG files from common icon theme locations (hicolor and
+  oxygen); applications that only ship SVG icons fall back to colored initials.
 - Single output configuration; no manual multi-monitor positioning.
 
 ## Layout

@@ -11,17 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Built-in launcher overlay, bound to `Super+Tab` by default, combining
   application search with a dock-style list of open windows.
-- **Open Windows** tab lists every open window, focuses a window when selected,
-  and shows a count badge for how many windows each application has open. The
-  list updates while the launcher is open.
+- **Open Windows** tab lists every open window and focuses a window when
+  selected. The list updates while the launcher is open.
 - **All Apps** tab discovers applications from XDG `.desktop` files, searches
-  them, and shows which applications already have open windows.
-- Launcher layout with a search field, two rounded tabs, a 5x3 tile grid,
-  pagination arrows and dots, and keyboard, mouse, and scroll navigation.
+  them, and marks applications that already have open windows. A dot means one
+  window and a numeric badge means several.
+- Launcher layout with a search field, two rounded tabs, a 5-column grid of
+  application logos and names, and keyboard, mouse, and scroll navigation.
+- Applications are sorted alphabetically, with window titles and application
+  IDs as tie-breakers.
+- A right-side scrollbar replaces pagination. It tracks the visible position
+  and supports click-to-jump and dragging; the mouse wheel and Page Up/Page
+  Down also scroll.
+- Translucent glass-style panel and controls, with no dark overlay behind the
+  launcher.
+- Application icons are loaded from PNG files referenced by `.desktop` entries,
+  with a colored-initial fallback for applications without a usable PNG.
 - `launcher` Lua action for opening or closing the launcher. Existing configs
   without the binding can still use the built-in `Super+Tab` fallback.
-- Launcher rendering uses Cairo for the panel, text, generated initial-based
-  application icons, and count badges. Cairo is now a build dependency.
+- Launcher rendering uses Cairo for the panel, text, icons, and badges. Cairo
+  is now a build dependency.
 - Terminal desktop entries are launched through `foot -e`.
 
 ## [0.3.2] - 2026-11-15

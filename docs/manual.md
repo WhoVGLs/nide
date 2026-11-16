@@ -241,21 +241,24 @@ Click an empty area to release keyboard focus.
 
 **Launcher** — Press Super+Tab to open the launcher overlay. It opens on the
 **Open Windows** tab when at least one window is running, otherwise on
-**All Apps**. Both tabs use a 5x3 grid with 15 results per page.
+**All Apps**. Both tabs show application logos and names in a 5-column grid,
+sorted alphabetically.
 
-- **Open Windows** lists each open window separately. The badge shows how many
-  windows that application has open. Selecting a tile raises and focuses that
-  window.
-- **All Apps** lists applications discovered from XDG `.desktop` files and
-  shows a badge when that application already has windows open. Launching a
-  terminal application uses `foot -e`.
+- **Open Windows** lists each open window separately. Selecting an entry raises
+  and focuses that window.
+- **All Apps** lists applications discovered from XDG `.desktop` files.
+  A small dot marks an application with one open window; a numeric badge shows
+  the count when it has more. Launching a terminal application uses `foot -e`.
 - Type to search the current tab's names and window titles. Use the arrow keys
-  to move, Enter to launch or focus, Tab to switch tabs, Page Up/Page Down or
-  the mouse wheel to change pages, and Esc or Super+Tab to close.
-- Click a tile or tab to use it. Clicking outside the panel closes the
-  launcher. The page arrows and dots are also clickable.
-- Launcher icons are generated from colored initials; application icon files
-  are not loaded yet.
+  to move, Enter to launch or focus, Tab to switch tabs, and Esc or Super+Tab
+  to close.
+- Use the scrollbar on the right side, the mouse wheel, or Page Up/Page Down to
+  scroll through the list. Click or drag the scrollbar to jump to a position.
+- Click an entry or tab to use it. Clicking outside the panel closes the
+  launcher.
+- The panel is translucent so the desktop stays visible behind it. Applications
+  use the PNG icon from their `.desktop` entry when available; otherwise a
+  colored initial is shown.
 
 **Moving windows** — Hold Super, left-click anywhere on the window, and drag.
 Release the mouse button to finish.
@@ -719,12 +722,14 @@ screen edge.
 **Focus** — New windows are focused immediately. Click another window to
 switch. Clicking an empty area releases keyboard focus.
 
-**Launcher** — The launcher is a centered overlay with a dimmed background,
-a search field, two tabs, a 5x3 tile grid, count badges, and pagination
-controls. Open Windows tiles update when windows open or close. All Apps reads
-XDG `.desktop` files the first time the launcher opens; restart NIDE to pick
-up newly installed applications. Application icons are colored initials for
-now, not icon files from the desktop entries.
+**Launcher** — The launcher is a centered, translucent panel with a search
+field, two tabs, a 5-column grid of application logos and names, a right-side
+scrollbar, and running-window badges in All Apps. There is no dimmed overlay.
+Open Windows entries update when windows open or close. All Apps reads XDG
+`.desktop` files the first time the launcher opens; restart NIDE to pick up
+newly installed applications. Icons are loaded from PNG files in the hicolor
+and oxygen theme locations when available; SVG-only applications fall back to
+colored initials.
 
 **Maximize and fullscreen** — Super+M maximizes the focused window with a
 margin from `nide.maximize_margin` (default 8 pixels). Saving a changed margin
@@ -818,7 +823,8 @@ available:
 - Minimize, animations, shadows, and decorations.
 - A traditional Alt+Tab switcher and workspaces. The launcher's Open Windows
   tab provides window switching.
-- Launcher icon files. Icons are generated from colored initials.
+- SVG launcher icons. PNG icons from the icon theme are used; SVG-only
+  applications show colored initials instead.
 - Tiling or automatic layout management; only edge snapping (left/right
   halves and top fullscreen) is available.
 - Manual multi-monitor position/scale configuration.
@@ -1019,8 +1025,8 @@ Type             search the current tab
 Arrow keys       move the selection
 Enter            launch app or focus window
 Tab              switch Open Windows / All Apps
-Page Up/Down     change page
-Mouse wheel      change page
+Page Up/Down     scroll one page
+Mouse wheel      scroll one row
 Esc / Super+Tab  close
 ```
 
